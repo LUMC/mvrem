@@ -1,0 +1,13 @@
+^\..*
+^.*\.md$
+^doc/
+^jsm_new_codes/
+^containers/
+^envs/
+^project/
+^\.quarto/
+^\.devcontainer/
+^\.gitlab-ci\.yml
+^code_in_container\.sh
+^.*\.pptx$
+^.*\.qmd$
