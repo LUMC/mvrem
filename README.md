@@ -19,6 +19,7 @@ You can install the jsm package from the GitLab repository:
 ```r
 # Install from GitLab
 remotes::install_git("https://git.lumc.nl/s.m.kielbasa/jsm_multiple_biomarkers_with_inla.git")
+remotes::install_github("LUMC/mvrem", ref = "devel")
 
 # Or install from local directory during development
 devtools::install()
