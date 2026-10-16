@@ -1,6 +1,6 @@
-# JSM: Joint Spatial Models for INLA
+# JSM: Joint Scaled Models for INLA
 
-An R package for constructing and fitting Joint Spatial Models (JSM) using the Integrated Nested Laplace Approximation (INLA) approach.
+An R package for constructing and fitting Joint Scaled Models (JSM) using the Integrated Nested Laplace Approximation (INLA) approach.
 
 ## Overview
 
@@ -17,21 +17,18 @@ This package requires **R-INLA**. Please install it following the official instr
 You can install the jsm package from the GitLab repository:
 
 ```r
-# Install from GitLab
-remotes::install_git("https://git.lumc.nl/s.m.kielbasa/jsm_multiple_biomarkers_with_inla.git")
+# Install from GitHub
 remotes::install_github("LUMC/mvrem", ref = "devel")
 
-# Or install from local directory during development
+# Or during development
 devtools::install()
-
-# Or load for development
 devtools::load_all()
 ```
 
 ## Quick Start
 
 ```r
-library(jsm)
+library(mvrem)
 
 # Load example data
 d <- read.table("data/simulated_t_x1x2_y.tsv", header = TRUE, sep = "\t")
@@ -53,12 +50,13 @@ data <- model$getData()
 
 # Fit using INLA
 result <- model$callInla()
+result
 ```
 
 ## Main Functions
 
-- **`jsm()`** - Create a Joint Spatial Model object
-- **`JSMMdl`** - The main R6 class for JSM models
+- **`jsm()`** - Create a Joint Scaled Model object
+- **`JSMMdl`** - The main R6 class for Joint Scaled Models (JSM) models
 
 ## JSMMdl Class Methods
 
@@ -87,8 +85,3 @@ result <- model$callInla()
 
 - R-INLA: https://www.r-inla.org/
 - Joint modeling with INLA: https://becarioprecario.bitbucket.io/inla-gitbook/
-- Missing data and measurement error with INLA: https://emmaskarstein.github.io/Missing-data-and-measurement-error/
-
-## License
-
-GPL-3

@@ -1,5 +1,5 @@
-Package: jsm
-Title: Joint Spatial Models with INLA
+Package: mvrem
+Title: Multivariate Joint Models with INLA
 Version: 0.1.0
 Authors@R: c(
     person("Szymon M.", "Kiełbasa", role = c("aut", "cre"), email = "S.M.Kielbasa@lumc.nl"),
@@ -7,7 +7,7 @@ Authors@R: c(
     person("Bart", "Mertens", role = c("ctb"), email = "B.J.A.Mertens@lumc.nl"),
     person("Roula", "Tsonaka", role = c("ctb"), email = "S.Tsonaka@lumc.nl")
     )
-Description: Provides tools for constructing and fitting Joint Spatial Models (JSM)
+Description: Provides tools for constructing and fitting Multivariate Joint Models
     using the Integrated Nested Laplace Approximation (INLA) approach. The package
     facilitates the specification of complex hierarchical models with multiple
     longitudinal and outcome processes, handling both fixed and random effects.
