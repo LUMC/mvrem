@@ -1,0 +1,28 @@
+Package: jsm
+Title: Joint Spatial Models with INLA
+Version: 0.1.0
+Authors@R: c(
+    person("Szymon M.", "Kiełbasa", role = c("aut", "cre"), email = "S.M.Kielbasa@lumc.nl"),
+    person("Chiara", "Degan", role = c("aut"), email = "C.Degan@lumc.nl"),
+    person("Bart", "Mertens", role = c("ctb"), email = "B.J.A.Mertens@lumc.nl"),
+    person("Roula", "Tsonaka", role = c("ctb"), email = "S.Tsonaka@lumc.nl")
+    )
+Description: Provides tools for constructing and fitting Joint Spatial Models (JSM)
+    using the Integrated Nested Laplace Approximation (INLA) approach. The package
+    facilitates the specification of complex hierarchical models with multiple
+    longitudinal and outcome processes, handling both fixed and random effects.
+License: GPL-3
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports:
+    dplyr,
+    rlang,
+    purrr,
+    tidyr,
+    lme4,
+    R6,
+    INLA
+Suggests:
+    testthat
