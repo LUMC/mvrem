@@ -1,6 +1,14 @@
 ---
 title: "JSM simple demo"
-author: "Szymon M. Kiełbasa"
+author:
+  - name: "Szymon M. Kiełbasa"
+    affiliation: "Department of Biomedical Data Sciences, Section Medical Statistics, Leiden University Medical Center"
+  - name: "Chiara Degan"
+    affiliation: "Department of Biomedical Data Sciences, Section Medical Statistics, Leiden University Medical Center"
+  - name: "Roula Tsonaka"
+    affiliation: "Department of Biomedical Data Sciences, Section Medical Statistics, Leiden University Medical Center"
+  - name: "Bart Mertens"
+    affiliation: "Department of Biomedical Data Sciences, Section Medical Statistics, Leiden University Medical Center"
 date: "`r format(Sys.Date(), '%Y-%m-%d')`"
 html:
   embed-resources: true
