@@ -21,7 +21,7 @@ per grouping term among the complete rows, e.g. \code{"id: 50"}),
 \item \code{missing}: one row per equation and variable used by it, with \code{part},
 \code{response}, \code{variable} and \code{missing} (number of missing values among the
 supplied rows),
-\item \code{zero}: one row per \code{scaled()} pair with \code{long}, \code{out}, \code{vars}
+\item \code{zero}: one row per (longitudinal, outcome) pair with \code{long}, \code{out}, \code{vars}
 (matching variables) and \code{rows} (zero equations = unique combinations of
 the matching variables in the complete outcome rows).
 }
@@ -32,5 +32,5 @@ can be used: the number of rows supplied, the number of complete rows (no
 missing value in the variables used by the formula; these are the rows kept
 by \code{\link[=prepareData]{prepareData()}} with \code{na.action = na.omit}), the number of groups per
 grouping term among the complete rows, the missing values per variable and
-the number of zero equations per \code{scaled()} pair.
+the number of zero equations per (longitudinal, outcome) pair.
 }

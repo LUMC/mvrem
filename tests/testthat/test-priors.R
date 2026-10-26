@@ -5,7 +5,7 @@ build <- function(formOut, formLong) {
   f <- collectFormulas(formOut, formLong)
   buildInlaFormula(f, prepareData(d, d, f))
 }
-hyperOf <- function(term) as.list(term)$hyper
+hyperOf <- function(term) eval(as.list(term)$hyper)   # embedded as a call
 lines <- function(x) {
   body <- sub("\n\\\\end\\{aligned\\}$", "", sub("^\\\\begin\\{aligned\\}\n", "", unclass(x)))
   strsplit(body, " \\\\\n", fixed = TRUE)[[1]]
@@ -119,7 +119,7 @@ test_that("other f() arguments are merged; hyper overriding the prior warns", {
                                   hyper = list(prec = list(initial = 4))))
   tm <- as.list(inl$random$x1[[1]]$terms[[1]])
   expect_true(tm$constr)
-  expect_equal(tm$hyper, list(prec = list(prior = "pc.prec", param = c(1, 0.01), initial = 4)))
+  expect_equal(eval(tm$hyper), list(prec = list(prior = "pc.prec", param = c(1, 0.01), initial = 4)))
   expect_warning(
     inl <- build(y ~ t, x1 ~ t + re(1 | id, prior = pcSd(u = 1),
                                     hyper = list(prec = list(prior = "loggamma", param = c(1, 1))))),

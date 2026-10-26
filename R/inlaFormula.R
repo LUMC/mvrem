@@ -9,7 +9,7 @@
 #' the longitudinal formula joined by `sep`, `{values}` their values joined by
 #' `valueSep`. Names are made syntactic by replacing other characters by `.`.
 #'
-#' The default reproduces names like `y_1`, `y_t_id`, `x1_TO_y_id_t`,
+#' The default reproduces names like `y_1`, `y_t_id`, `x1_TO_y_id_t`, `y_Ntrials`,
 #' `y_FROM_x1_id_t` and index values like `"y|1|S001"`, `"x1|TO|y|S001|0.5"`.
 #' The scheme in use can be set globally with `options(mvrem.naming = namingScheme(...))`.
 #'
@@ -22,6 +22,8 @@ namingScheme <- function(...) {
     levelsObject = "LEVELS",         # list holding the `values` of the f() terms
     response = "{resp}_{resp}",      # response column
     zeroResponse = "{resp}_{resp}_0eq",
+    trials = "{resp}_Ntrials",       # trials() column (INLA `Ntrials`)
+    exposure = "{resp}_E",           # exposure() column (INLA `E`)
     intercept = "1",
     fixed = "{resp}_{term}",         # fixed-effect covariate column (also RE weight)
     reIndex = "{resp}_{term}_{group}",
@@ -52,17 +54,26 @@ namingScheme <- function(...) {
 #'   give an `iid<k>d` term (`iidkd` for k > 5) for the first effect and `copy`
 #'   terms for the others. Slopes use the fixed covariate column as weight.
 #'   Indices are labels (`"y|t|S001"`) listed in `LEVELS`;
-#' * **zero-equation** (longitudinal responses, one per outcome using them via
-#'   `scaled()`): latent field `x1_TO_y_id_t` with weight `x1_WEIGHT`
+#' * **zero-equation** (longitudinal responses, one per outcome; every outcome
+#'   is linked to every longitudinal response): latent field `x1_TO_y_id_t` with weight `x1_WEIGHT`
 #'   (equation `0 = eta_x1 - u`), indexed by the grouping variables and
-#'   covariates of the longitudinal formula at the outcome rows;
-#' * **scaled** (outcome responses): `y_FROM_x1_id_t`, a scaled copy of the
-#'   corresponding zero-equation field.
+#'   covariates of the longitudinal formula at the outcome rows; the precision
+#'   of `u` is fixed and small (`initial = -6`, diffuse), so `u` follows the
+#'   zero equations;
+#' * **scaled** (outcome responses, one per longitudinal response):
+#'   `y_FROM_x1_id_t`, a scaled copy of the corresponding zero-equation field.
+#'   Its parameters (e.g. the prior of the scaling coefficient) can be set by a
+#'   `scaled(x1, ...)` term in the outcome formula; without it the defaults are used.
 #'
 #' A `prior` given in `re(...)` (see [priors]) sets the `hyper` argument of the
 #' block's term. Other parameters given in `re(...)` / `scaled(...)` override
 #' the defaults (nested lists such as `hyper` are merged; a warning is given when
 #' `hyper` replaces the distribution set by `prior`).
+#'
+#' The likelihood of each response, its link and hyperparameter priors come
+#' from its family (see [families]), giving `families` and `controlFamily`.
+#' `trials()` / `exposure()` on the left-hand side add a column to the
+#' response's stacked data.
 #'
 #' @param forms Result of [collectFormulas()].
 #' @param data Result of [prepareData()].
@@ -73,6 +84,13 @@ namingScheme <- function(...) {
 #'   * `families`: INLA likelihood family per response column (named by the
 #'     columns of `responses`, then `zeroResponses`; zero equations are
 #'     `"gaussian"`), in the order of the likelihoods of the INLA model,
+#'   * `controlFamily`: INLA `control.family`, one entry per element of
+#'     `families` (see [controlFamily()]); zero equations have a fixed
+#'     precision (placeholder: log precision 10),
+#'   * `inputs`: per response, the stack columns of its family inputs, named
+#'     by INLA argument (`c(Ntrials = "y_Ntrials")`, `c(E = "z_E")`; empty if
+#'     none). Rows of other likelihoods (and zero equations) hold `NA` there,
+#'     to be replaced by 1 when the INLA arguments are assembled,
 #'   * `fixed`: per response, `formula` and `columns` (INLA name -> design-matrix column),
 #'   * `random`: per response, a list of blocks with `group`, `lhs` (formula of
 #'     the block's effects), `effects`
@@ -87,7 +105,7 @@ namingScheme <- function(...) {
 #'   * `formulas`: the user's formulae,
 #'   * `stacks`: per response, the stacked data with the formula's column names:
 #'     `main` (observation rows) and, for longitudinal responses, one element
-#'     per outcome using it via `scaled()` (zero-equation rows: one per unique
+#'     per outcome (zero-equation rows: one per unique
 #'     combination of the long formula's grouping variables and covariates in
 #'     the outcome data; the outcome is matched to them by these values),
 #'   * `formula`: the INLA formula; its environment holds `LEVELS`.
@@ -103,7 +121,8 @@ buildInlaFormula <- function(forms, data, naming = getOption("mvrem.naming", nam
   zeroResponses <- vapply(forms$long, function(p)
     fillName(nm$zeroResponse, resp = p$response), "")
 
-  # zero-equation / scaled pairs, one per scaled() term
+  # zero-equation / scaled pairs, one per (out, long) pair (collectFormulas()
+  # lists all long responses in `scaled`, with the parameters of scaled() terms)
   zero <- list()
   scaled <- list()
   for (o in forms$out) for (s in o$scaled) {
@@ -118,7 +137,8 @@ buildInlaFormula <- function(forms, data, naming = getOption("mvrem.naming", nam
       long = l$response, out = o$response, vars = vars, index = index, weight = weight,
       levels = index,
       term = fTerm(index, weight,
-                   list(model = "iid", values = levelsRef(nm, index), hyper = list()), list())
+                   list(model = "iid", values = levelsRef(nm, index), hyper = zeroFieldHyper),
+                   list())
     )
     sIndex <- fillName(nm$scaledIndex, long = l$response, out = o$response, vars = varsTxt)
     scaled[[paste0(o$response, "_", l$response)]] <- list(
@@ -151,7 +171,14 @@ buildInlaFormula <- function(forms, data, naming = getOption("mvrem.naming", nam
     terms[[r]] <- unname(calls)
   }
 
+  inputs <- lapply(c(forms$out, forms$long), function(p) {
+    a <- names(p$aux)
+    stats::setNames(vapply(a, function(x) fillName(nm[[x]], resp = p$response), ""),
+                    c(trials = "Ntrials", exposure = "E")[a])
+  })
+
   allIdx <- c(unlist(lapply(fixed, function(f) names(f$columns))),
+              unlist(inputs, use.names = FALSE),
               unlist(lapply(random, function(r) lapply(r, `[[`, "index"))),
               vapply(zero, `[[`, "", "index"), vapply(scaled, `[[`, "", "index"))
   dup <- unique(allIdx[duplicated(allIdx)])
@@ -163,16 +190,23 @@ buildInlaFormula <- function(forms, data, naming = getOption("mvrem.naming", nam
   assign(nm$levelsObject, levels, envir = env)
   rhs <- Reduce(function(a, b) call("+", a, b), unlist(terms, use.names = FALSE), quote(-1))
 
+  fams <- lapply(c(forms$out, forms$long), function(p)
+    if (is.null(p$family)) defaultFamily() else p$family)
   families <- c(
-    stats::setNames(vapply(c(forms$out, forms$long), function(p)
-      if (is.null(p$family)) defaultFamily else p$family, ""), responses),
+    stats::setNames(vapply(fams, `[[`, "", "family"), responses),
     stats::setNames(rep("gaussian", length(zeroResponses)), zeroResponses)
+  )
+  control <- c(
+    stats::setNames(lapply(fams, controlFamily), responses),
+    stats::setNames(rep(list(zeroControlFamily), length(zeroResponses)), zeroResponses)
   )
 
   res <- list(
     responses = responses,
     zeroResponses = zeroResponses,
     families = families,
+    controlFamily = control,
+    inputs = inputs,
     fixed = fixed,
     random = random,
     zero = zero,
@@ -186,6 +220,11 @@ buildInlaFormula <- function(forms, data, naming = getOption("mvrem.naming", nam
   res$stacks <- buildStacks(forms, data, res)
   res
 }
+
+# Prior of the zero-equation field u: fixed, small precision (diffuse), so that u
+# is determined by the zero equations (an estimated precision shrinks u, and with
+# it the long predictor, to 0).
+zeroFieldHyper <- list(prec = list(initial = -6, fixed = TRUE))
 
 # Labels of the zero-equation field at the rows of df.
 zeroLabels <- function(df, long, out, vars, nm) {
@@ -229,19 +268,30 @@ equationColumns <- function(p, inl, df, ref) {
   cols
 }
 
+# Family input columns (trials(), exposure()) of a response at the rows of df.
+inputColumns <- function(p, inl, df) {
+  cols <- inl$inputs[[p$response]]
+  res <- data.frame(row.names = seq_len(nrow(df)))
+  for (a in names(cols)) {
+    aux <- p$aux[[c(Ntrials = "trials", E = "exposure")[[a]]]]
+    res[[cols[[a]]]] <- as.numeric(eval(aux, df, environment(p$formula)))
+  }
+  res
+}
+
 # Stacked data of each response's equations, with the column names used in
 # the INLA formula. Outcome stacks: response, equation columns and scaled
 # indices. Longitudinal stacks: the observation rows followed by the
-# zero-equation rows (one set per outcome using the response via scaled()).
+# zero-equation rows (one set per outcome).
 buildStacks <- function(forms, data, inl) {
   nm <- inl$naming
   stacks <- list()
   for (p in forms$out) {
     r <- p$response
     df <- data$out[[r]]
-    st <- data.frame(eval(p$formula[[2L]], df, environment(p$formula)))
+    st <- data.frame(eval(p$responseExpr, df, environment(p$formula)))
     names(st) <- inl$responses[[r]]
-    st <- cbind(st, equationColumns(p, inl, df, df))
+    st <- cbind(st, inputColumns(p, inl, df), equationColumns(p, inl, df, df))
     for (sc in Filter(function(s) s$out == r, inl$scaled)) {
       z <- inl$zero[[paste0(sc$long, "_", r)]]
       st[[sc$index]] <- zeroLabels(df, sc$long, r, z$vars, nm)
@@ -252,9 +302,9 @@ buildStacks <- function(forms, data, inl) {
     r <- p$response
     ref <- data$long[[r]]
     zs <- Filter(function(z) z$long == r, inl$zero)
-    st <- data.frame(eval(p$formula[[2L]], ref, environment(p$formula)), NA_real_)
+    st <- data.frame(eval(p$responseExpr, ref, environment(p$formula)), NA_real_)
     names(st) <- c(inl$responses[[r]], inl$zeroResponses[[r]])
-    st <- cbind(st, equationColumns(p, inl, ref, ref))
+    st <- cbind(st, inputColumns(p, inl, ref), equationColumns(p, inl, ref, ref))
     if (length(zs)) st[[zs[[1L]]$weight]] <- NA_real_
     for (z in zs) st[[z$index]] <- NA_character_
     parts <- list(main = st)
@@ -265,6 +315,7 @@ buildStacks <- function(forms, data, inl) {
       od <- od[!duplicated(zeroLabels(od, r, z$out, z$vars, nm)), , drop = FALSE]
       zr <- data.frame(NA_real_, 0, row.names = NULL)[rep(1L, nrow(od)), , drop = FALSE]
       names(zr) <- c(inl$responses[[r]], inl$zeroResponses[[r]])
+      for (col in inl$inputs[[r]]) zr[[col]] <- NA_real_
       zr <- cbind(zr, equationColumns(p, inl, od, ref))
       zr[[z$weight]] <- -1
       for (z2 in zs) zr[[z2$index]] <- NA_character_
@@ -330,7 +381,8 @@ randomTerms <- function(p, df, groups, nm) {
     valuesOf <- function(e) fillValue(nm$reValue, resp = r, term = labels[e], level = lev)
     checkBlockPrior(blk$prior, k, blk$correlated, blk$term)
     hyper <- if (!is.null(blk$prior)) list(hyper = priorHyper(blk$prior, k))
-    warnHyperOverride(hyper$hyper, blk$params[["hyper"]], blk$term)
+    warnHyperOverride(hyper$hyper, blk$params[["hyper"]],
+                      paste0("block `", deparse1(blk$term), "`"))
 
     if (k == 1L || !blk$correlated) {
       levName <- vapply(seq_len(k), function(e)
@@ -365,20 +417,27 @@ randomTerms <- function(p, df, groups, nm) {
   unlist(blocks, recursive = FALSE)
 }
 
-# Warn when a user `hyper` replaces the distribution set by `prior`.
-warnHyperOverride <- function(fromPrior, user, term) {
+# Warn when a user `hyper` replaces the distribution set by `prior`; what =
+# description of the block / family.
+warnHyperOverride <- function(fromPrior, user, what) {
   if (is.null(fromPrior) || !is.list(user)) return(invisible())
   over <- names(fromPrior)[vapply(names(fromPrior), function(h)
     is.list(user[[h]]) && any(c("prior", "param") %in% names(user[[h]])), NA)]
   if (length(over))
-    warning("`hyper` overrides the `prior` of block `", deparse1(term), "` (",
+    warning("`hyper` overrides the `prior` of ", what, " (",
             paste(over, collapse = ", "), ").", call. = FALSE)
   invisible()
 }
 
 # f(index, [weight], ...) call; user parameters override defaults by name.
+# Values (lists, vectors) are embedded as the calls that build them: terms()
+# deparses embedded objects without their names (`list(list("pc.prec", ...))`),
+# so INLA would silently ignore e.g. `hyper`.
 fTerm <- function(index, weight, defaults, params) {
   args <- utils::modifyList(defaults, params, keep.null = TRUE)
+  args <- lapply(args, function(a)
+    if (is.language(a) || (is.atomic(a) && length(a) == 1L && is.null(attributes(a)))) a
+    else str2lang(deparse1(a)))
   as.call(c(list(quote(f), as.name(index)),
             if (!is.null(weight) && !is.na(weight)) list(as.name(weight)),
             args))

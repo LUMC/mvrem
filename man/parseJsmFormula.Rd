@@ -7,7 +7,10 @@
 parseJsmFormula(formula, part = c("out", "long"))
 }
 \arguments{
-\item{formula}{A two-sided formula. Random effects may be given in lme4
+\item{formula}{A two-sided formula. The left-hand side is the response
+(an expression of one variable, e.g. \code{y} or \code{log(y)}), optionally
+followed by \code{|} and family inputs (see \link{families}):
+\code{y | trials(n) ~ ...}, \code{y | exposure(pt) ~ ...}. Random effects may be given in lme4
 notation, \code{(1 + t | id)}, or as \code{re(1 + t | id, ...)} where \code{...} holds extra
 (named) parameters, e.g. \code{prior = pcSd(u = 1)} (see \link{priors}). Outcome
 formulae may contain \code{scaled(x, ...)} terms.}
@@ -19,21 +22,27 @@ A list with elements
 \itemize{
 \item \code{response}: name of the response variable (e.g. \code{y} for \code{log(y) ~ ...});
 used to name formulae, data frames and \code{scaled()} targets,
-\item \code{lhs}: the left-hand side as written (e.g. \code{log(y)}),
+\item \code{lhs}: the response expression as written (e.g. \code{log(y)}, without the
+\verb{| trials(n)} part),
+\item \code{responseExpr}: the response expression as a call / name,
+\item \code{aux}: named list of the family inputs of the left-hand side
+(\code{trials}, \code{exposure}; expressions), empty if none,
 \item \code{part}: \code{"out"} or \code{"long"},
 \item \code{formula}: the formula as given by the user,
 \item \code{variables}: list with character vectors \code{response} (variables in the
 left-hand side, e.g. \code{y} for \code{log(y)}), \code{covariate} (variables in fixed-effect
 terms and on the left of \code{|} in random-effect terms, e.g. \code{t} for \code{I(t^2)})
-and \code{group} (variables on the right of \code{|}, e.g. \code{id}, or \code{a} and \code{b} for \code{a:b}),
+\code{group} (variables on the right of \code{|}, e.g. \code{id}, or \code{a} and \code{b} for \code{a:b})
+and \code{aux} (variables of \code{trials()} / \code{exposure()}),
 \item \code{fixedFormula}: the fixed-effects part only (no random effects, no \code{scaled()}),
 \item \code{lme4Formula}: formula with \code{re()} replaced by lme4 bar terms and \code{scaled()} removed,
 \item \code{re}: list of random-effect blocks, each with \code{term} (the lme4 bar expression),
 \code{group} (grouping factor name), \code{correlated} (\code{FALSE} for \code{||}) and
 \code{params} (named list of extra arguments, evaluated in the formula environment)
 and \code{prior} (the \code{prior} argument, see \link{priors}, or \code{NULL}),
-\item \code{scaled}: (outcome formulae only) list of associations, each with \code{target}
-(longitudinal response name) and \code{params}.
+\item \code{scaled}: (outcome formulae only) list of the formula's \code{scaled()} terms,
+each with \code{target} (longitudinal response name) and \code{params}
+(\code{\link[=collectFormulas]{collectFormulas()}} completes it to all longitudinal responses).
 }
 }
 \description{

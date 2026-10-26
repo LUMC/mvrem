@@ -25,6 +25,13 @@ longitudinal response,
 \item \code{families}: INLA likelihood family per response column (named by the
 columns of \code{responses}, then \code{zeroResponses}; zero equations are
 \code{"gaussian"}), in the order of the likelihoods of the INLA model,
+\item \code{controlFamily}: INLA \code{control.family}, one entry per element of
+\code{families} (see \code{\link[=controlFamily]{controlFamily()}}); zero equations have a fixed
+precision (placeholder: log precision 10),
+\item \code{inputs}: per response, the stack columns of its family inputs, named
+by INLA argument (\code{c(Ntrials = "y_Ntrials")}, \code{c(E = "z_E")}; empty if
+none). Rows of other likelihoods (and zero equations) hold \code{NA} there,
+to be replaced by 1 when the INLA arguments are assembled,
 \item \code{fixed}: per response, \code{formula} and \code{columns} (INLA name -> design-matrix column),
 \item \code{random}: per response, a list of blocks with \code{group}, \code{lhs} (formula of
 the block's effects), \code{effects}
@@ -39,7 +46,7 @@ the block's effects), \code{effects}
 \item \code{formulas}: the user's formulae,
 \item \code{stacks}: per response, the stacked data with the formula's column names:
 \code{main} (observation rows) and, for longitudinal responses, one element
-per outcome using it via \code{scaled()} (zero-equation rows: one per unique
+per outcome (zero-equation rows: one per unique
 combination of the long formula's grouping variables and covariates in
 the outcome data; the outcome is matched to them by these values),
 \item \code{formula}: the INLA formula; its environment holds \code{LEVELS}.
@@ -56,12 +63,16 @@ effects (\code{||}) give one \code{iid} term per effect, correlated effects (\co
 give an \verb{iid<k>d} term (\code{iidkd} for k > 5) for the first effect and \code{copy}
 terms for the others. Slopes use the fixed covariate column as weight.
 Indices are labels (\code{"y|t|S001"}) listed in \code{LEVELS};
-\item \strong{zero-equation} (longitudinal responses, one per outcome using them via
-\code{scaled()}): latent field \code{x1_TO_y_id_t} with weight \code{x1_WEIGHT}
+\item \strong{zero-equation} (longitudinal responses, one per outcome; every outcome
+is linked to every longitudinal response): latent field \code{x1_TO_y_id_t} with weight \code{x1_WEIGHT}
 (equation \code{0 = eta_x1 - u}), indexed by the grouping variables and
-covariates of the longitudinal formula at the outcome rows;
-\item \strong{scaled} (outcome responses): \code{y_FROM_x1_id_t}, a scaled copy of the
-corresponding zero-equation field.
+covariates of the longitudinal formula at the outcome rows; the precision
+of \code{u} is fixed and small (\code{initial = -6}, diffuse), so \code{u} follows the
+zero equations;
+\item \strong{scaled} (outcome responses, one per longitudinal response):
+\code{y_FROM_x1_id_t}, a scaled copy of the corresponding zero-equation field.
+Its parameters (e.g. the prior of the scaling coefficient) can be set by a
+\code{scaled(x1, ...)} term in the outcome formula; without it the defaults are used.
 }
 }
 \details{
@@ -69,4 +80,9 @@ A \code{prior} given in \code{re(...)} (see \link{priors}) sets the \code{hyper}
 block's term. Other parameters given in \code{re(...)} / \code{scaled(...)} override
 the defaults (nested lists such as \code{hyper} are merged; a warning is given when
 \code{hyper} replaces the distribution set by \code{prior}).
+
+The likelihood of each response, its link and hyperparameter priors come
+from its family (see \link{families}), giving \code{families} and \code{controlFamily}.
+\code{trials()} / \code{exposure()} on the left-hand side add a column to the
+response's stacked data.
 }

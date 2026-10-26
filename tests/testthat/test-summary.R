@@ -40,22 +40,24 @@ test_that("missing values per variable", {
   expect_equal(sum(m$missing[m$response == "x2"]), 0L)
 })
 
-test_that("zero equations per scaled() pair", {
+test_that("zero equations per (long, out) pair", {
   z <- s$zero
-  expect_equal(nrow(z), 1L)
+  expect_equal(nrow(z), 2L)                # x2 is linked without scaled()
   expect_equal(unlist(z[1, c("long", "out", "vars")], use.names = FALSE), c("x1", "y", "id, t"))
-  expect_equal(z$rows, 11L)
+  expect_equal(unlist(z[2, c("long", "out", "vars")], use.names = FALSE), c("x2", "y", "t"))
+  expect_equal(z$rows, c(11L, 4L))
   # duplicated outcome rows do not add zero equations
-  expect_equal(summarizeData(f, rbind(dOut, dOut), list(x1 = dLong, x2 = dm))$zero$rows, 11L)
+  expect_equal(summarizeData(f, rbind(dOut, dOut), list(x1 = dLong, x2 = dm))$zero$rows,
+               c(11L, 4L))
 })
 
-test_that("print shows the tables; models without scaled()", {
+test_that("print shows the tables; models without random effects", {
   expect_output(print(s), "Equations")
   expect_output(print(s), "Zero equations")
   expect_output(print(s), "Missing values per variable")
   s0 <- summarizeData(collectFormulas(y ~ t, x ~ t), data.frame(y = 1:3, t = 1:3, x = 1:3),
                       data.frame(y = 1:3, t = 1:3, x = 1:3))
-  expect_equal(nrow(s0$zero), 0L)
+  expect_equal(s0$zero$rows, 3L)           # linked without scaled()
   expect_output(print(s0), "none")
   expect_error(summarizeData(f, dOut, list(x1 = dLong)), "No data frame")
 })

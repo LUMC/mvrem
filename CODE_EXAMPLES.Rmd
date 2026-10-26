@@ -27,7 +27,9 @@ d <- data.frame(
   t    = rep(0:2, 4),
   age  = rep(c(50, 61, 47, 70), each = 3),
   x1 = rnorm(12), x2 = rnorm(12), x3 = rnorm(12),
-  z  = rnorm(12), y = runif(12)
+  z  = rnorm(12), y = runif(12),
+  n  = 10, k = rbinom(12, 10, 0.3),      # successes out of n trials
+  pt = round(runif(12, 1, 3), 2), cnt = rpois(12, 4)  # exposure and counts
 )
 head(d)
 ```
@@ -82,8 +84,11 @@ p$variables
 
 ### `scaled()` terms (outcome formulae only)
 
-`scaled()` terms are removed from the lme4 formula; their target and
-parameters are collected separately. Targets are not data variables.
+Every outcome is associated with every longitudinal response, with or without a
+`scaled()` term; `scaled(x, ...)` only sets non-default parameters of the
+association with `x`. `scaled()` terms are removed from the lme4 formula; their
+target and parameters are collected separately. Targets are not data variables.
+`collectFormulas()` completes the list to all longitudinal responses (see below).
 
 ```{r}
 p <- parseJsmFormula(y ~ 1 + t + re(1 + t | id) + scaled(x1, hyper = list(beta = list(initial = 1))) +
@@ -118,21 +123,71 @@ forms <- collectFormulas(
 )
 names(forms$out)
 names(forms$long)
+# every outcome is linked to every long response; scaled() only gave parameters
+sapply(forms$out, function(o) vapply(o$scaled, `[[`, "", "target"))
+str(forms$out$y$scaled[2:3])
 lapply(c(forms$out, forms$long), `[[`, "lme4Formula")
 forms$variables
 ```
 
 ### Likelihood families — `familyOut`, `familyLong`
 
-Named character vectors (names = response variables), values = INLA likelihood
-names (`inlaFamilies()`); unlisted responses are `"gaussian"`.
+Named lists (names = response variables) of family objects; unlisted responses
+are Gaussian. A constructor sets the INLA likelihood, the link and the priors of
+the family's hyperparameters, i.e. the response's `control.family` entry:
+
+| Constructor | INLA likelihood | Hyperparameters | LHS input |
+|---|---|---|---|
+| `gaussianFamily()` | `gaussian` | `prec` | |
+| `studentTFamily()` | `t` | `prec`, `dof` | |
+| `lognormalFamily()` | `lognormal` | `prec` | |
+| `gammaFamily()` | `gamma` | `prec` | |
+| `betaFamily()` | `beta` | `phi` | |
+| `poissonFamily()` | `poisson` | | `exposure()` |
+| `negBinomialFamily()` | `nbinomial` | `size` | `exposure()` |
+| `binomialFamily()` | `binomial` | | `trials()` |
+| `betaBinomialFamily()` | `betabinomial` | `rho` | `trials()` |
+| `zeroInflatedPoissonFamily(type)` | `zeroinflatedpoisson0/1` | `prob` | `exposure()` |
+| `zeroInflatedNegBinomialFamily(type)` | `zeroinflatednbinomial0/1` | `size`, `prob` | `exposure()` |
+| `inlaFamily(name, link, hyper)` | any non-survival | any | both |
+
+A hyperparameter takes a prior constructor (`gammaPrec()`, `pcSd()`, ... for
+precision-like parameters; `gammaPrec()` for `size`) or a raw INLA entry;
+`control` adds any other `control.family` entry. `controlFamily()` shows the
+result:
 
 ```{r}
-sapply(c(forms$out, forms$long), `[[`, "family")
-fF <- collectFormulas(list(y ~ t + scaled(n), z ~ t), list(n ~ t + (1 | id)),
-                      familyOut = c(y = "beta", z = "binomial"),
-                      familyLong = c(n = "poisson"))
-sapply(c(fF$out, fF$long), `[[`, "family")
+betaFamily(phi = gammaPrec(1, 0.1))
+controlFamily(binomialFamily(link = "probit"))
+controlFamily(gaussianFamily(prec = list(initial = log(100), fixed = TRUE)))
+controlFamily(betaFamily(control = list(beta.censor.value = 1e-4)))
+```
+
+The number of trials (binomial) and the exposure (count families) are given on
+the left-hand side, as in brms: `k | trials(n) ~ ...`, `cnt | exposure(pt) ~ ...`.
+Their variables have role `aux`:
+
+```{r}
+fF <- collectFormulas(
+  formOut = list(y ~ t + scaled(cnt), k | trials(n) ~ t + (1 | id)),
+  formLong = list(cnt | exposure(pt) ~ t + (1 | id)),
+  familyOut = list(y = betaFamily(phi = gammaPrec(1, 0.1)),
+                   k = binomialFamily(link = "probit")),
+  familyLong = list(cnt = negBinomialFamily(size = gammaPrec(1, 0.1)))
+)
+sapply(c(fF$out, fF$long), function(p) p$family$family)
+fF$out$k$aux
+fF$variables[fF$variables$role == "aux", ]
+```
+
+An INLA likelihood name is short for the constructor with its defaults
+(`inlaFamily()` for other likelihoods); a named character vector is accepted too:
+
+```{r}
+fN <- collectFormulas(list(y ~ t, z ~ t), list(x1 ~ t),
+                      familyOut = list(y = "beta", z = "logistic"))
+fN$out$y$family
+fN$out$z$family
 head(inlaFamilies(), 20)
 ```
 
@@ -226,7 +281,7 @@ prepareData(dataOut = d, dataLong = dm, forms = forms, na.action = na.fail)
 How much of the supplied data each equation can use: rows supplied, complete
 rows (no missing value in the formula's variables, i.e. kept by `prepareData()`
 with `na.omit`), groups among the complete rows, missing values per variable,
-and the number of zero equations per `scaled()` pair.
+and the number of zero equations per (longitudinal, outcome) pair.
 
 ```{r}
 dMiss <- d
@@ -243,9 +298,11 @@ Built from the parsed formulae and the prepared data. Per response:
 * **random**: a single or uncorrelated (`||`) effect gives an `iid` term per
   effect; correlated effects (`|`) give `iid<k>d` plus `copy` terms. Slopes use
   the fixed covariate column as weight; indices are labels listed in `LEVELS`;
-* **zero-equation** (longitudinal): `x1_TO_y_id_t` per outcome using `x1`,
-  keyed by the grouping variables and covariates of `x1` at the outcome rows;
-* **scaled** (outcome): `y_FROM_x1_id_t`, a scaled copy of the zero-equation field.
+* **zero-equation** (longitudinal): `x1_TO_y_id_t` per outcome (all outcomes are
+  linked to all longitudinal responses), keyed by the grouping variables and
+  covariates of `x1` at the outcome rows;
+* **scaled** (outcome): `y_FROM_x1_id_t`, a scaled copy of the zero-equation
+  field, one per longitudinal response; `scaled(x1, ...)` only changes its parameters.
 
 Parameters in `re(...)` / `scaled(...)` override the defaults (nested lists merged).
 
@@ -339,14 +396,22 @@ cat(format(latexEquation(forms$long$x1), delim = "$$"))
 ```
 
 Families: a gaussian response gets the identity and a residual
-$\varepsilon$; other families a generic link $g$ and a line naming the family.
-Outcome with a transformed response and `scaled()` terms:
+$\varepsilon$; other families the link of their mean and a distribution line,
+followed by the priors of their hyperparameters (`inlaFamily()`: a generic link
+$g$ and a line naming the likelihood). Outcome with a transformed response and
+`scaled()` terms:
 
 ```{r, results = "asis"}
 fL <- collectFormulas(log(y) ~ 1 + t + re(1 + t | id) + scaled(x1) + scaled(x2),
                       list(x1 ~ t + (1 | id), x2 ~ t + (1 | id)),
                       familyOut = c(y = "gamma"))
 cat(format(latexEquation(fL$out$y), delim = "$$"))
+```
+
+The model with trials, exposure and family priors from above:
+
+```{r, results = "asis"}
+cat(format(latexEquation(fF, prepareData(d, d, fF)), delim = "$$"))
 ```
 
 Covariate expressions, uncorrelated effects and a composite grouping factor —
@@ -458,9 +523,8 @@ reTerms(x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 6, scale = V)))
 reTerms(x1 ~ 1 + t + I(t^2) + re(1 + t + I(t^2) | id,
                                  prior = wishartPrec(df = 5, scale = diag(c(1, 0.5, 0.1)))))
 
-# the old reference default c(3, 1, 0.004, 0) is V = diag(1, 250), but INLA requires df > k + 1
-reTerms(x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 3, scale = diag(c(1, 250)))))
-reTerms(x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 4, scale = diag(c(1, 250)))))
+# INLA requires df > k + 1
+reTerms(x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 3)))
 ```
 
 ### Factor in the random-effect term
@@ -507,9 +571,9 @@ mP <- collectFormulas(
     x2 ~ 1 + t + (1 | id),                       # lme4 notation -> INLA default prior
     x3 ~ 1 + t + re(1 + t || id, prior = gammaPrec(1, 0.01))
   ),
-  familyLong = c(x3 = "poisson")
+  familyLong = list(x3 = poissonFamily())
 )
-datP <- prepareData(d, d, mP)
+datP <- prepareData(d, transform(d, x3 = cnt), mP)   # x3: counts
 formatInlaFormula(buildInlaFormula(mP, datP), nrows = 0)
 ```
 
@@ -582,6 +646,26 @@ collectFormulas(y ~ t, x1 ~ t, familyOut = c(y = "betta"))
 
 # family given for a response of the other part
 collectFormulas(y ~ t, x1 ~ t, familyOut = c(x1 = "poisson"))
+
+# survival likelihoods are not supported yet
+collectFormulas(y ~ t, x1 ~ t, familyOut = c(y = "weibullsurv"))
+
+# link not available for the likelihood
+betaFamily(link = "identity")
+
+# hyperparameter prior not suited to the parameter
+betaBinomialFamily(rho = gammaPrec())
+
+# trials() / exposure() must be used by the family
+collectFormulas(k | trials(n) ~ t, x1 ~ t, familyOut = list(k = poissonFamily()))
+
+# only trials() and exposure() after `|` on the left-hand side
+parseJsmFormula(y | weights(w) ~ t)
+
+# responses are checked against the family's support
+prepareData(d, d, collectFormulas(x1 ~ t, x2 ~ t, familyOut = list(x1 = betaFamily())))
+prepareData(transform(d, k = k + 5), d,
+            collectFormulas(k | trials(n) ~ t, x2 ~ t, familyOut = list(k = binomialFamily())))
 
 # old scaled(~ x) syntax
 parseJsmFormula(y ~ t + scaled(~x1))

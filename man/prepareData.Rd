@@ -25,14 +25,16 @@ named by response. Each data frame contains
 data frame if it has any (they must be unique), otherwise by the row
 number. Rows coming from the same user data frame (or subsets of it) thus
 share keys across formulae,
-\item the variables used by the formula (response, covariates, grouping
-variables), untransformed; outcome data also contain the \code{linkVariables}
-(variables of the \code{scaled()} targets, needed for the zero equations),
+\item the variables used by the formula (response, \code{trials()} / \code{exposure()}
+variables, covariates, grouping variables), untransformed; outcome data also contain the \code{linkVariables}
+(variables of all longitudinal formulae, needed for the zero equations),
 \item one factor column per grouping term, named as the term (e.g. \code{id},
 \code{site:id}); a grouping variable is thereby replaced by its factor version.
 }
 
-Only rows kept by \code{na.action} are returned.
+Only rows kept by \code{na.action} are returned. The responses (and
+\code{trials()} / \code{exposure()} values) are checked against the support of the
+formula's family (see \link{families}), e.g. a beta response must be in (0, 1).
 }
 \description{
 Matches the outcome and longitudinal data to the parsed formulae (see

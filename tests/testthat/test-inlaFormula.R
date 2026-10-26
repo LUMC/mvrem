@@ -38,7 +38,7 @@ test_that("correlated random effects: iid2d + copy weighted by the fixed column"
   expect_equal(t1$model, "iid2d")
   expect_equal(deparse1(t1$values), "LEVELS$y_1_t_id")
   expect_equal(deparse1(t1$n), "length(LEVELS$y_1_t_id)")
-  expect_equal(t1$hyper, wish)
+  expect_equal(eval(t1$hyper), wish)                  # embedded as the call building it
   expect_equal(deparse1(b$terms[[2]]), 'f(y_t_id, y_t, copy = "y_1_id")')
   expect_equal(inl$levels$y_1_t_id,
                c(paste0("y|1|S00", 1:3), paste0("y|t|S00", 1:3)))
@@ -55,22 +55,27 @@ test_that("single and uncorrelated random effects: one iid per effect", {
 })
 
 test_that("zero-equation terms: one per (long, out) pair, keyed by group and covariates", {
-  expect_named(inl$zero, c("x1_y", "x2_y"))
+  expect_named(inl$zero, c("x1_y", "x2_y", "x3_y"))     # x3: no scaled() term, still linked
+  expect_equal(inl$zero$x3_y$vars, c("id", "t", "g"))
   z <- inl$zero$x1_y
   expect_equal(z$vars, c("id", "t"))
   expect_equal(deparse1(z$term),
-               'f(x1_TO_y_id_t, x1_WEIGHT, model = "iid", values = LEVELS$x1_TO_y_id_t, hyper = list())')
+               'f(x1_TO_y_id_t, x1_WEIGHT, model = "iid", values = LEVELS$x1_TO_y_id_t, hyper = list(prec = list(initial = -6, fixed = TRUE)))')
   expect_equal(head(inl$levels$x1_TO_y_id_t, 2), c("x1|TO|y|S001|0", "x1|TO|y|S001|0.5"))
   expect_length(inl$levels$x1_TO_y_id_t, 12)
   expect_equal(inl$zero$x2_y$index, "x2_TO_y_id_t")  # t: fixed covariate of x2
 })
 
 test_that("scaled terms: copy of the zero-equation field, user hyper merged", {
-  expect_named(inl$scaled, c("y_x1", "y_x2"))
+  expect_named(inl$scaled, c("y_x1", "y_x2", "y_x3"))
+  # without scaled(): default parameters
+  expect_equal(deparse1(inl$scaled$y_x3$term), paste0(
+    'f(y_FROM_x3_id_t_g, copy = "x3_TO_y_id_t_g", hyper = list(beta = list(fixed = FALSE, ',
+    'prior = "normal", param = c(0, 0.01))))'))
   s <- term(inl$scaled$y_x1$term)
   expect_equal(deparse1(s[[2]]), "y_FROM_x1_id_t")
   expect_equal(s$copy, "x1_TO_y_id_t")
-  expect_equal(s$hyper$beta, list(fixed = FALSE, prior = "normal", param = c(0, 0.022),
+  expect_equal(eval(s$hyper)$beta, list(fixed = FALSE, prior = "normal", param = c(0, 0.022),
                                   initial = 2.2))
 })
 
@@ -105,13 +110,36 @@ test_that("complete formula is accepted by INLA", {
   skip_if_not_installed("INLA")
   i <- INLA:::inla.interpret.formula(inl$formula, data.same.len = FALSE, data = NULL)
   models <- vapply(i$random.spec, `[[`, "", "model")
-  expect_equal(as.vector(table(models)[c("iid", "iid2d", "copy")]), c(5L, 2L, 4L))
+  expect_equal(as.vector(table(models)[c("iid", "iid2d", "copy")]), c(6L, 2L, 5L))
+})
+
+test_that("f() arguments survive terms() and reach INLA (names kept)", {
+  fp <- collectFormulas(y ~ t + re(1 | id, prior = pcSd(u = 2)) +
+                          scaled(x1, hyper = list(beta = list(param = c(0, 0.5)))),
+                        x1 ~ t + (1 | id))
+  dp <- data.frame(id = rep(1:3, each = 2), t = rep(0:1, 3), x1 = rnorm(6), y = rnorm(6))
+  ip <- buildInlaFormula(fp, prepareData(dp, dp, fp))
+  labels <- attr(stats::terms(ip$formula), "term.labels")
+  expect_true(any(grepl('hyper = list(prec = list(prior = "pc.prec", param = c(2, 0.01)))',
+                        labels, fixed = TRUE)))
+  expect_true(any(grepl("hyper = list(prec = list(initial = -6, fixed = TRUE))", labels,
+                        fixed = TRUE)))
+  skip_if_not_installed("INLA")
+  spec <- INLA:::inla.interpret.formula(ip$formula, data.same.len = FALSE, data = NULL)$random.spec
+  names(spec) <- vapply(spec, `[[`, "", "term")
+  expect_equal(spec$y_1_id$hyper$theta$prior, "pc.prec", ignore_attr = TRUE)
+  expect_equal(spec$y_1_id$hyper$theta$param, c(2, 0.01), ignore_attr = TRUE)
+  expect_true(spec$x1_TO_y_id_t$hyper$theta$fixed)
+  expect_equal(spec$x1_TO_y_id_t$hyper$theta$initial, -6, ignore_attr = TRUE)
+  expect_equal(spec$y_FROM_x1_id_t$hyper$theta$param, c(0, 0.5), ignore_attr = TRUE)
+  expect_false(spec$y_FROM_x1_id_t$hyper$theta$fixed)
 })
 
 test_that("stacks hold the formula's columns for observation and zero-equation rows", {
   y <- inl$stacks$y$main
   expect_equal(names(y), c("y_y", "y_1", "y_t", "y_1_id", "y_t_id",
-                           "y_FROM_x1_id_t", "y_FROM_x2_id_t"))
+                           "y_FROM_x1_id_t", "y_FROM_x2_id_t", "y_FROM_x3_id_t_g"))
+  expect_named(inl$stacks$x3, c("main", "y"))
   expect_equal(y$y_y, d$y)
   expect_equal(y$y_t_id[1:2], c("y|t|S001", "y|t|S001"))
   expect_equal(y$y_FROM_x1_id_t[2], "x1|TO|y|S001|0.5")

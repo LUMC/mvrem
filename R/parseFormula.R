@@ -4,18 +4,29 @@
 #' original formula, its lme4-compatible simplification, and the extra
 #' parameters given to `re()` and `scaled()` terms.
 #'
+#' Every outcome is associated with every longitudinal response (a scaled copy
+#' of its linear predictor, see [buildInlaFormula()]). A `scaled(x, ...)` term
+#' is only needed to give non-default parameters of the association with `x`.
+#'
 #' @param formOut List of outcome formulae. May contain `re()` and `scaled()` terms.
 #' @param formLong List of longitudinal formulae. May contain `re()` terms only.
-#' @param familyOut,familyLong Likelihood families: named character vectors
-#'   (names = response variables of `formOut` / `formLong`, values = INLA
-#'   likelihood names, see `names(INLA::inla.models()$likelihood)`), e.g.
-#'   `c(y = "beta")`. Responses not listed get `"gaussian"`. Values are
-#'   validated when INLA is installed.
+#' @param familyOut,familyLong Likelihood families: named lists (names =
+#'   response variables of `formOut` / `formLong`) of family objects (see
+#'   [families]), e.g. `list(y = betaFamily(phi = gammaPrec(1, 0.1)))`. An
+#'   element may also be an INLA likelihood name (`"beta"`; a named character
+#'   vector is accepted too), meaning the family's constructor with its
+#'   defaults ([inlaFamily()] for likelihoods without a constructor; names are
+#'   validated when INLA is installed). Responses not listed get
+#'   [gaussianFamily()].
 #' @return A list with elements `out` and `long`, each a list named by response
 #'   variable, whose elements are the result of [parseJsmFormula()] with an
-#'   added `family` (outcome elements additionally have `linkVariables`:
-#'   grouping variables and covariates of their `scaled()` targets not already
-#'   used by the outcome formula), and
+#'   added `family` (an `mvremFamily` object; `trials()` / `exposure()` on the
+#'   left-hand side are checked against it). In outcome elements, `scaled` holds
+#'   one association per longitudinal response (in the order of `formLong`;
+#'   `params` from the formula's `scaled()` term, or empty), and
+#'   `linkVariables` the grouping variables and covariates of all longitudinal
+#'   formulae not already used by the outcome formula (the outcome data must
+#'   contain them). Also returned:
 #'   `variables`, a data frame with one row per variable and role, with columns
 #'   `variable`, `role` (`"response"`, `"covariate"` or `"group"`), `part` and
 #'   `formula` (response of the formula it occurs in).
@@ -35,20 +46,29 @@ collectFormulas <- function(formOut, formLong, familyOut = NULL, familyLong = NU
     stop("Response(s) defined more than once: ", paste(dup, collapse = ", "), call. = FALSE)
 
   for (o in out) {
-    bad <- setdiff(vapply(o$scaled, `[[`, "", "target"), names(long))
+    targets <- vapply(o$scaled, `[[`, "", "target")
+    bad <- setdiff(targets, names(long))
     if (length(bad))
       stop("scaled() in formula for '", o$response, "' refers to unknown longitudinal ",
            "response(s): ", paste(bad, collapse = ", "), call. = FALSE)
+    dupT <- unique(targets[duplicated(targets)])
+    if (length(dupT))
+      stop("scaled() in formula for '", o$response, "' is given more than once for: ",
+           paste(dupT, collapse = ", "), call. = FALSE)
   }
 
-  # variables of the scaled() targets (other than their response) must also be
-  # available in the outcome data: the zero equations are evaluated at outcome rows
+  # every outcome is associated with every longitudinal response; scaled() only
+  # supplies the parameters. The variables of the long formulae (other than
+  # their response) must also be available in the outcome data: the zero
+  # equations are evaluated at outcome rows
+  longVars <- unique(unlist(lapply(long, function(l) l$variables[c("group", "covariate")]),
+                            use.names = FALSE))
   for (r in names(out)) {
-    targets <- vapply(out[[r]]$scaled, `[[`, "", "target")
-    out[[r]]$linkVariables <- setdiff(
-      unique(unlist(lapply(long[targets], function(l) l$variables[c("group", "covariate")]),
-                    use.names = FALSE)),
-      unlist(out[[r]]$variables, use.names = FALSE))
+    given <- out[[r]]$scaled
+    names(given) <- vapply(given, `[[`, "", "target")
+    out[[r]]$scaled <- unname(lapply(names(long), function(l)
+      list(target = l, params = if (is.null(given[[l]])) list() else given[[l]]$params)))
+    out[[r]]$linkVariables <- setdiff(longVars, unlist(out[[r]]$variables, use.names = FALSE))
     if (is.null(out[[r]]$linkVariables)) out[[r]]$linkVariables <- character()
   }
 
@@ -56,6 +76,7 @@ collectFormulas <- function(formOut, formLong, familyOut = NULL, familyLong = NU
   famLong <- resolveFamilies(familyLong, names(long), "familyLong", names(out))
   for (r in names(out)) out[[r]]$family <- famOut[[r]]
   for (r in names(long)) long[[r]]$family <- famLong[[r]]
+  for (p in c(out, long)) checkAux(p)
 
   list(out = out, long = long, variables = variableTable(c(out, long)))
 }
@@ -70,14 +91,20 @@ inlaFamilies <- function() {
   names(INLA::inla.models()$likelihood)
 }
 
-defaultFamily <- "gaussian"
-
-# Validate a named family vector and complete it with the default family.
+# Validate a named list / character vector of families and complete it with
+# the default family; elements become mvremFamily objects.
 resolveFamilies <- function(family, resp, argName, otherResp) {
-  res <- stats::setNames(rep(defaultFamily, length(resp)), resp)
+  res <- stats::setNames(lapply(resp, function(r) defaultFamily()), resp)
   if (is.null(family)) return(res)
-  if (!is.character(family) || anyNA(family))
-    stop("`", argName, "` must be a named character vector.", call. = FALSE)
+  if (inherits(family, "mvremFamily"))
+    stop("`", argName, "` must be a named list of families, e.g. list(y = ",
+         family$kind, "Family()).", call. = FALSE)
+  isName <- function(f) is.character(f) && length(f) == 1L && !is.na(f)
+  ok <- if (is.character(family)) !anyNA(family) else
+    is.list(family) && all(vapply(family, function(f) inherits(f, "mvremFamily") || isName(f), NA))
+  if (!ok)
+    stop("`", argName, "` must be a named list of family objects (see ?families) or ",
+         "INLA likelihood names.", call. = FALSE)
   nms <- names(family)
   if (length(family) && (is.null(nms) || any(nms == "") || anyDuplicated(nms)))
     stop("`", argName, "` must have unique, non-empty names (the response variables).",
@@ -91,18 +118,22 @@ resolveFamilies <- function(family, resp, argName, otherResp) {
                                    " belongs to the other part)"),
          call. = FALSE)
   }
-  known <- inlaFamilies()
-  if (is.null(known)) {
-    warning("INLA is not installed: likelihood families in `", argName,
-            "` are not validated.", call. = FALSE)
-  } else {
-    bad <- setdiff(family, known)
-    if (length(bad))
-      stop("Unknown INLA likelihood family in `", argName, "`: ",
-           paste(bad, collapse = ", "), ". See inlaFamilies().", call. = FALSE)
+  for (r in nms) {
+    f <- family[[r]]
+    res[[r]] <- if (inherits(f, "mvremFamily")) f else familyFromName(f, paste0("`", argName, "`"))
   }
-  res[nms] <- family
   res
+}
+
+# trials() / exposure() on the left-hand side must be used by the family.
+checkAux <- function(p) {
+  bad <- setdiff(names(p$aux), p$family$aux)
+  if (length(bad))
+    stop(paste0(bad, "()", collapse = ", "), " on the left-hand side of the formula for '",
+         p$response, "' is not used by family '", p$family$family, "'",
+         if (length(p$family$aux)) paste0(" (it takes ", paste0(p$family$aux, "()"), ")"),
+         ".", call. = FALSE)
+  invisible()
 }
 
 # One row per (variable, role, formula) across all parsed formulae.
@@ -127,18 +158,23 @@ variableTable <- function(parsed) {
 
 # Data variables used by a formula, by role. all.vars() skips function names,
 # so log(y), I(t^2), poly(t, 2), ns(t, df = 3) etc. yield only the variables.
-collectVariables <- function(lhs, fixed, re) {
+collectVariables <- function(lhs, fixed, re, aux) {
   allVars <- function(exprs) unique(unlist(lapply(exprs, all.vars)))
-  list(
+  vars <- list(
     response = all.vars(lhs),
     covariate = allVars(c(fixed, lapply(re, function(b) b$term[[2L]]))),
     group = allVars(lapply(re, function(b) b$term[[3L]]))
   )
+  vars$aux <- if (length(aux)) allVars(aux) else character()
+  vars
 }
 
 #' Parse a single joint-model formula
 #'
-#' @param formula A two-sided formula. Random effects may be given in lme4
+#' @param formula A two-sided formula. The left-hand side is the response
+#'   (an expression of one variable, e.g. `y` or `log(y)`), optionally
+#'   followed by `|` and family inputs (see [families]):
+#'   `y | trials(n) ~ ...`, `y | exposure(pt) ~ ...`. Random effects may be given in lme4
 #'   notation, `(1 + t | id)`, or as `re(1 + t | id, ...)` where `...` holds extra
 #'   (named) parameters, e.g. `prior = pcSd(u = 1)` (see [priors]). Outcome
 #'   formulae may contain `scaled(x, ...)` terms.
@@ -146,21 +182,27 @@ collectVariables <- function(lhs, fixed, re) {
 #' @return A list with elements
 #'   * `response`: name of the response variable (e.g. `y` for `log(y) ~ ...`);
 #'     used to name formulae, data frames and `scaled()` targets,
-#'   * `lhs`: the left-hand side as written (e.g. `log(y)`),
+#'   * `lhs`: the response expression as written (e.g. `log(y)`, without the
+#'     `| trials(n)` part),
+#'   * `responseExpr`: the response expression as a call / name,
+#'   * `aux`: named list of the family inputs of the left-hand side
+#'     (`trials`, `exposure`; expressions), empty if none,
 #'   * `part`: `"out"` or `"long"`,
 #'   * `formula`: the formula as given by the user,
 #'   * `variables`: list with character vectors `response` (variables in the
 #'     left-hand side, e.g. `y` for `log(y)`), `covariate` (variables in fixed-effect
 #'     terms and on the left of `|` in random-effect terms, e.g. `t` for `I(t^2)`)
-#'     and `group` (variables on the right of `|`, e.g. `id`, or `a` and `b` for `a:b`),
+#'     `group` (variables on the right of `|`, e.g. `id`, or `a` and `b` for `a:b`)
+#'     and `aux` (variables of `trials()` / `exposure()`),
 #'   * `fixedFormula`: the fixed-effects part only (no random effects, no `scaled()`),
 #'   * `lme4Formula`: formula with `re()` replaced by lme4 bar terms and `scaled()` removed,
 #'   * `re`: list of random-effect blocks, each with `term` (the lme4 bar expression),
 #'     `group` (grouping factor name), `correlated` (`FALSE` for `||`) and
 #'     `params` (named list of extra arguments, evaluated in the formula environment)
 #'     and `prior` (the `prior` argument, see [priors], or `NULL`),
-#'   * `scaled`: (outcome formulae only) list of associations, each with `target`
-#'     (longitudinal response name) and `params`.
+#'   * `scaled`: (outcome formulae only) list of the formula's `scaled()` terms,
+#'     each with `target` (longitudinal response name) and `params`
+#'     ([collectFormulas()] completes it to all longitudinal responses).
 #' @export
 parseJsmFormula <- function(formula, part = c("out", "long")) {
   part <- match.arg(part)
@@ -168,8 +210,10 @@ parseJsmFormula <- function(formula, part = c("out", "long")) {
     stop("Each model formula must be a two-sided formula.", call. = FALSE)
 
   env <- environment(formula)
-  lhs <- deparse1(formula[[2L]])
-  response <- all.vars(formula[[2L]])
+  lhsParts <- parseLhs(formula[[2L]])
+  responseExpr <- lhsParts$response
+  lhs <- deparse1(responseExpr)
+  response <- all.vars(responseExpr)
   if (length(response) != 1L)
     stop("The left-hand side of a formula must contain exactly one variable (found '",
          lhs, "').", call. = FALSE)
@@ -205,20 +249,46 @@ parseJsmFormula <- function(formula, part = c("out", "long")) {
     }
   }
 
-  lme4Formula <- buildFormula(formula[[2L]], keep, env)
+  lme4Formula <- buildFormula(responseExpr, keep, env)
 
   res <- list(
     response = response,
     lhs = lhs,
+    responseExpr = responseExpr,
+    aux = lhsParts$aux,
     part = part,
     formula = formula,
     lme4Formula = lme4Formula,
-    fixedFormula = buildFormula(formula[[2L]], fixedTerms, env),
-    variables = collectVariables(formula[[2L]], fixed, re),
+    fixedFormula = buildFormula(responseExpr, fixedTerms, env),
+    variables = collectVariables(responseExpr, fixed, re, lhsParts$aux),
     re = re
   )
   if (part == "out") res$scaled <- scaled
   res
+}
+
+# Family inputs allowed on the left-hand side: y | trials(n) + exposure(E).
+auxTerms <- c("trials", "exposure")
+
+# Split the left-hand side into the response expression and the family inputs.
+parseLhs <- function(e) {
+  if (!(is.call(e) && identical(e[[1L]], quote(`|`))))
+    return(list(response = e, aux = list()))
+  aux <- list()
+  for (tm in flattenTerms(e[[3L]])) {
+    a <- tm$expr
+    fn <- if (is.call(a) && is.name(a[[1L]])) as.character(a[[1L]]) else ""
+    if (tm$sign < 0 || !fn %in% auxTerms)
+      stop("Unsupported term on the left-hand side after `|`: ", deparse1(a), "; use ",
+           paste0(auxTerms, "()", collapse = " or "), ".", call. = FALSE)
+    if (length(a) != 2L || (!is.null(names(a)) && names(a)[2L] != ""))
+      stop(fn, "() takes exactly one unnamed argument (found ", deparse1(a), ").",
+           call. = FALSE)
+    if (!is.null(aux[[fn]]))
+      stop(fn, "() is given more than once on the left-hand side.", call. = FALSE)
+    aux[[fn]] <- a[[2L]]
+  }
+  list(response = e[[2L]], aux = aux)
 }
 
 # Split a RHS expression into additive terms, keeping track of the sign.

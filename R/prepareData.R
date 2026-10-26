@@ -22,13 +22,15 @@ keyColumn <- ".key"
 #'     data frame if it has any (they must be unique), otherwise by the row
 #'     number. Rows coming from the same user data frame (or subsets of it) thus
 #'     share keys across formulae,
-#'   * the variables used by the formula (response, covariates, grouping
-#'     variables), untransformed; outcome data also contain the `linkVariables`
-#'     (variables of the `scaled()` targets, needed for the zero equations),
+#'   * the variables used by the formula (response, `trials()` / `exposure()`
+#'     variables, covariates, grouping variables), untransformed; outcome data also contain the `linkVariables`
+#'     (variables of all longitudinal formulae, needed for the zero equations),
 #'   * one factor column per grouping term, named as the term (e.g. `id`,
 #'     `site:id`); a grouping variable is thereby replaced by its factor version.
 #'
-#'   Only rows kept by `na.action` are returned.
+#'   Only rows kept by `na.action` are returned. The responses (and
+#'   `trials()` / `exposure()` values) are checked against the support of the
+#'   formula's family (see [families]), e.g. a beta response must be in (0, 1).
 #' @export
 prepareData <- function(dataOut, dataLong, forms, na.action = stats::na.omit) {
   na.action <- match.fun(na.action)
@@ -42,7 +44,9 @@ assignData <- function(data, parsed, argName, na.action) {
   data <- matchData(data, parsed, argName)
   res <- lapply(names(parsed), function(r) {
     df <- addKey(data[[r]], argName)
-    selectData(parsed[[r]], df, na.action)
+    res <- selectData(parsed[[r]], df, na.action)
+    checkResponse(parsed[[r]], res)
+    res
   })
   stats::setNames(res, names(parsed))
 }
@@ -100,8 +104,8 @@ selectData <- function(p, df, na.action) {
     groups <- glf$reTrms$flist
   }
   vars <- unique(unlist(p$variables, use.names = FALSE))
-  res <- df[rownames(frame), c(keyColumn, vars, p$linkVariables), drop = FALSE]
-  if (length(p$linkVariables)) {
+  res <- df[rownames(frame), unique(c(keyColumn, vars, p$linkVariables)), drop = FALSE]
+  if (length(p$variables$aux) || length(p$linkVariables)) {
     res <- na.action(res)
     attr(res, "na.action") <- NULL
   }

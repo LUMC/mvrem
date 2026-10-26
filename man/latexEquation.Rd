@@ -30,9 +30,14 @@ grouping factor at observation \eqn{i}, e.g. \code{id[i]}. Fixed effects are
 \eqn{\beta^{(r)}_k} (\eqn{k = 0} for the intercept), random effects
 \eqn{b^{(r)}_k} share the index of the fixed effect of the same column (other
 columns continue the numbering). Longitudinal responses get a residual
-\eqn{\varepsilon^{(r)}_i}; outcomes are written through a generic link
-\eqn{g_r(\mathrm{E}[\cdot])} as families are not yet known. A \code{scaled(x)}
-term in outcome \eqn{y} is \eqn{\gamma_{y,x}\,u^{(x \to y)}_{\mathrm{id}[i],t_i}}:
+\eqn{\varepsilon^{(r)}_i} (Gaussian family). Each family (see \link{families})
+writes its link of the mean, e.g. \eqn{\mathrm{logit}(\mu^{(r)}_i)}, and a
+distribution line, e.g. \eqn{y_i \sim \mathrm{Beta}(\mu_i \phi, (1 - \mu_i)\phi)},
+followed by the priors of its hyperparameters given by prior constructors;
+\code{\link[=inlaFamily]{inlaFamily()}} and a standalone outcome formula without family use a generic
+link \eqn{g_r(\mathrm{E}[\cdot])}. In a whole model every outcome \eqn{y} is
+associated with every longitudinal response \eqn{x} (with or without a
+\code{scaled(x)} term); the association term is \eqn{\gamma_{y,x}\,u^{(x \to y)}_{\mathrm{id}[i],t_i}}:
 the outcome is matched to the longitudinal submodel by the values of the
 grouping variables and covariates of \eqn{x} (here \code{id}, \code{t}), not by row.
 \eqn{u^{(x \to y)}_{\mathrm{id},t}} is defined by the zero equation

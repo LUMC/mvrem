@@ -2,7 +2,8 @@
 #'
 #' Formats the INLA formula built by [buildInlaFormula()] one term per line,
 #' grouped by response. Each group is preceded by a comment with the user's
-#' formula and the first rows of the corresponding stacked data (observation
+#' formula, the likelihood family and `control.family` (also of the zero
+#' equations of a longitudinal response) and the first rows of the corresponding stacked data (observation
 #' rows and, for longitudinal responses, zero-equation rows).
 #'
 #' @param inl Result of [buildInlaFormula()].
@@ -20,7 +21,10 @@ formatInlaFormula <- function(inl, nrows = 4L, digits = 3L) {
     r <- resp[i]
     out <- c(out, "   #",
              paste0("   # ----- ", r, ": ", deparse1(inl$formulas[[r]]), " -----"),
-             "   #")
+             familyComment("", inl, inl$responses[[r]]))
+    if (r %in% names(inl$zeroResponses))
+      out <- c(out, familyComment("zero equations: ", inl, inl$zeroResponses[[r]]))
+    out <- c(out, "   #")
     if (nrows > 0) {
       parts <- lapply(inl$stacks[[r]], utils::head, n = nrows)
       tab <- do.call(rbind, unname(parts))
@@ -32,6 +36,12 @@ formatInlaFormula <- function(inl, nrows = 4L, digits = 3L) {
     out <- c(out, paste0(terms, ifelse(last & seq_along(terms) == length(terms), "", " +")))
   }
   structure(out, class = "mvremFormulaText")
+}
+
+familyComment <- function(prefix, inl, col) {
+  ctrl <- inl$controlFamily[[col]]
+  paste0("   # ", prefix, "family = \"", inl$families[[col]], "\"",
+         if (length(ctrl)) paste0(", control.family = ", deparse1(ctrl, width.cutoff = 500L)))
 }
 
 #' @export

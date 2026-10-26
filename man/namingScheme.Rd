@@ -23,7 +23,7 @@ the longitudinal formula joined by \code{sep}, \code{{values}} their values join
 \code{valueSep}. Names are made syntactic by replacing other characters by \code{.}.
 }
 \details{
-The default reproduces names like \code{y_1}, \code{y_t_id}, \code{x1_TO_y_id_t},
+The default reproduces names like \code{y_1}, \code{y_t_id}, \code{x1_TO_y_id_t}, \code{y_Ntrials},
 \code{y_FROM_x1_id_t} and index values like \code{"y|1|S001"}, \code{"x1|TO|y|S001|0.5"}.
 The scheme in use can be set globally with \code{options(mvrem.naming = namingScheme(...))}.
 }

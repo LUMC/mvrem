@@ -11,18 +11,25 @@ collectFormulas(formOut, formLong, familyOut = NULL, familyLong = NULL)
 
 \item{formLong}{List of longitudinal formulae. May contain \code{re()} terms only.}
 
-\item{familyOut, familyLong}{Likelihood families: named character vectors
-(names = response variables of \code{formOut} / \code{formLong}, values = INLA
-likelihood names, see \code{names(INLA::inla.models()$likelihood)}), e.g.
-\code{c(y = "beta")}. Responses not listed get \code{"gaussian"}. Values are
-validated when INLA is installed.}
+\item{familyOut, familyLong}{Likelihood families: named lists (names =
+response variables of \code{formOut} / \code{formLong}) of family objects (see
+\link{families}), e.g. \code{list(y = betaFamily(phi = gammaPrec(1, 0.1)))}. An
+element may also be an INLA likelihood name (\code{"beta"}; a named character
+vector is accepted too), meaning the family's constructor with its
+defaults (\code{\link[=inlaFamily]{inlaFamily()}} for likelihoods without a constructor; names are
+validated when INLA is installed). Responses not listed get
+\code{\link[=gaussianFamily]{gaussianFamily()}}.}
 }
 \value{
 A list with elements \code{out} and \code{long}, each a list named by response
 variable, whose elements are the result of \code{\link[=parseJsmFormula]{parseJsmFormula()}} with an
-added \code{family} (outcome elements additionally have \code{linkVariables}:
-grouping variables and covariates of their \code{scaled()} targets not already
-used by the outcome formula), and
+added \code{family} (an \code{mvremFamily} object; \code{trials()} / \code{exposure()} on the
+left-hand side are checked against it). In outcome elements, \code{scaled} holds
+one association per longitudinal response (in the order of \code{formLong};
+\code{params} from the formula's \code{scaled()} term, or empty), and
+\code{linkVariables} the grouping variables and covariates of all longitudinal
+formulae not already used by the outcome formula (the outcome data must
+contain them). Also returned:
 \code{variables}, a data frame with one row per variable and role, with columns
 \code{variable}, \code{role} (\code{"response"}, \code{"covariate"} or \code{"group"}), \code{part} and
 \code{formula} (response of the formula it occurs in).
@@ -31,4 +38,9 @@ used by the outcome formula), and
 Parses every outcome and longitudinal formula and returns, per formula, the
 original formula, its lme4-compatible simplification, and the extra
 parameters given to \code{re()} and \code{scaled()} terms.
+}
+\details{
+Every outcome is associated with every longitudinal response (a scaled copy
+of its linear predictor, see \code{\link[=buildInlaFormula]{buildInlaFormula()}}). A \code{scaled(x, ...)} term
+is only needed to give non-default parameters of the association with \code{x}.
 }

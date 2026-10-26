@@ -9,9 +9,14 @@
 #' \eqn{\beta^{(r)}_k} (\eqn{k = 0} for the intercept), random effects
 #' \eqn{b^{(r)}_k} share the index of the fixed effect of the same column (other
 #' columns continue the numbering). Longitudinal responses get a residual
-#' \eqn{\varepsilon^{(r)}_i}; outcomes are written through a generic link
-#' \eqn{g_r(\mathrm{E}[\cdot])} as families are not yet known. A `scaled(x)`
-#' term in outcome \eqn{y} is \eqn{\gamma_{y,x}\,u^{(x \to y)}_{\mathrm{id}[i],t_i}}:
+#' \eqn{\varepsilon^{(r)}_i} (Gaussian family). Each family (see [families])
+#' writes its link of the mean, e.g. \eqn{\mathrm{logit}(\mu^{(r)}_i)}, and a
+#' distribution line, e.g. \eqn{y_i \sim \mathrm{Beta}(\mu_i \phi, (1 - \mu_i)\phi)},
+#' followed by the priors of its hyperparameters given by prior constructors;
+#' [inlaFamily()] and a standalone outcome formula without family use a generic
+#' link \eqn{g_r(\mathrm{E}[\cdot])}. In a whole model every outcome \eqn{y} is
+#' associated with every longitudinal response \eqn{x} (with or without a
+#' `scaled(x)` term); the association term is \eqn{\gamma_{y,x}\,u^{(x \to y)}_{\mathrm{id}[i],t_i}}:
 #' the outcome is matched to the longitudinal submodel by the values of the
 #' grouping variables and covariates of \eqn{x} (here `id`, `t`), not by row.
 #' \eqn{u^{(x \to y)}_{\mathrm{id},t}} is defined by the zero equation
@@ -112,7 +117,7 @@ uSymbol <- function(l, out, obs = "i") {
 # distribution lines) and `eta` (fixed and random terms of the linear predictor).
 # obs: observation index ("i"), or NULL to write variables without index (used
 # for zero equations, which are indexed by covariate values); longs: parsed
-# long formulae (to index u in scaled() terms by the matching variables).
+# long formulae (to index u in association terms by the matching variables).
 latexFormula <- function(p, df, obs = "i", longs = NULL) {
   r <- p$response
   tag <- paste0("(", latexName(r), ")")
@@ -166,20 +171,17 @@ latexFormula <- function(p, df, obs = "i", longs = NULL) {
                              uSymbol(l, r, obs)))
   }
 
-  # family: gaussian -> identity + residual; other -> generic link and the
-  # family as a distribution line; unknown (standalone outcome) -> generic link
+  # family (see familyLatex()); unknown (standalone outcome) -> generic link
   fam <- p$family
-  if (is.null(fam)) fam <- if (p$part == "long") defaultFamily else NA_character_
-  y <- exprLatex(p$formula[[2L]])
-  if (identical(fam, "gaussian")) {
-    lhs <- y
-    terms <- c(terms, paste0("\\varepsilon^{", tag, "}_{i}"))
-    dist <- c(paste0("\\varepsilon^{", tag, "}_{i} &\\sim \\mathcal{N}\\left(0, \\left(",
-                     "\\tau^{", tag, "}_{\\varepsilon}\\right)^{-1}\\right)"), dist)
-  } else {
+  if (is.null(fam) && p$part == "long") fam <- defaultFamily()
+  y <- exprLatex(p$responseExpr)
+  if (is.null(fam)) {
     lhs <- paste0("g_{", latexName(r), "}\\left(\\mathrm{E}\\left[", y, "\\right]\\right)")
-    if (!is.na(fam))
-      dist <- c(paste0(y, " &\\sim \\mathrm{", escapeLatex(fam), "}"), dist)
+  } else {
+    fl <- familyLatex(fam, y, tag, latexName(r), p$aux)
+    lhs <- fl$lhs
+    terms <- c(terms, fl$residual)
+    dist <- c(fl$dist, dist)
   }
   rhs <- if (length(terms)) paste(terms, collapse = " + ") else "0"
   list(eq = paste0(lhs, " &= ", rhs), dist = dist, eta = eta)

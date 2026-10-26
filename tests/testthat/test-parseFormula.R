@@ -32,10 +32,14 @@ test_that("collectFormulas parses the reference model specification", {
   expect_false(res$long$x3$re[[1]]$correlated)
   expect_equal(res$long$x3$re[[1]]$group, "id")
 
-  # scaled terms (outcome only)
-  expect_equal(vapply(res$out$y$scaled, `[[`, "", "target"), c("x1", "x2"))
+  # scaled terms (outcome only): every outcome is linked to every long response,
+  # scaled() only supplies parameters
+  expect_equal(vapply(res$out$y$scaled, `[[`, "", "target"), c("x1", "x2", "x3"))
   expect_equal(res$out$y$scaled[[1]]$params, list(hyper = list(beta = list(initial = 1))))
-  expect_equal(res$out$z$scaled, list())
+  expect_equal(res$out$y$scaled[[3]]$params, list())
+  expect_equal(vapply(res$out$z$scaled, `[[`, "", "target"), c("x1", "x2", "x3"))
+  expect_true(all(lengths(lapply(res$out$z$scaled, `[[`, "params")) == 0))
+  expect_length(parseJsmFormula(res$out$z$formula, "out")$scaled, 0)  # as written
   expect_null(res$long$x1$scaled)
 
   # original formula kept
@@ -106,9 +110,17 @@ test_that("t^2 without a separate t term yields covariate t", {
 test_that("likelihood families are validated and default to gaussian", {
   f <- collectFormulas(list(y ~ t + scaled(x1), z ~ t), list(x1 ~ t, n ~ t),
                        familyOut = c(y = "beta"), familyLong = c(n = "poisson"))
-  expect_equal(vapply(f$out, `[[`, "", "family"), c(y = "beta", z = "gaussian"))
-  expect_equal(vapply(f$long, `[[`, "", "family"), c(x1 = "gaussian", n = "poisson"))
-  expect_equal(collectFormulas(y ~ t, x ~ t)$out$y$family, "gaussian")
+  fam <- function(x) vapply(x, function(p) p$family$family, "")
+  expect_equal(fam(f$out), c(y = "beta", z = "gaussian"))
+  expect_equal(fam(f$long), c(x1 = "gaussian", n = "poisson"))
+  expect_s3_class(f$out$y$family, "mvremFamily")
+  expect_equal(f$out$y$family, betaFamily())        # name -> constructor defaults
+  expect_equal(collectFormulas(y ~ t, x ~ t)$out$y$family, gaussianFamily())
+  # family objects and names may be mixed in a list
+  f2 <- collectFormulas(list(y ~ t, z ~ t), x ~ t,
+                        familyOut = list(y = betaFamily(link = "probit"), z = "gamma"))
+  expect_equal(f2$out$y$family$link, "probit")
+  expect_equal(f2$out$z$family, gammaFamily())
 
   skip_if_not_installed("INLA")
   expect_true(all(c("gaussian", "beta", "poisson", "binomial") %in% inlaFamilies()))
@@ -117,5 +129,23 @@ test_that("likelihood families are validated and default to gaussian", {
   expect_error(collectFormulas(y ~ t, x ~ t, familyLong = c(q = "beta")), "do not match any response")
   expect_error(collectFormulas(y ~ t, x ~ t, familyOut = "beta"), "non-empty names")
   expect_error(collectFormulas(y ~ t, x ~ t, familyOut = c(y = "beta", y = "gamma")), "unique")
-  expect_error(collectFormulas(y ~ t, x ~ t, familyOut = list(y = "beta")), "character vector")
+  expect_error(collectFormulas(y ~ t, x ~ t, familyOut = list(y = 1)), "named list of family")
+  expect_error(collectFormulas(y ~ t, x ~ t, familyOut = betaFamily()), "named list of families")
+  expect_error(collectFormulas(y ~ t, x ~ t, familyOut = c(y = "weibullsurv")), "not supported yet")
+  expect_equal(collectFormulas(y ~ t, x ~ t, familyOut = c(y = "logistic"))$out$y$family$kind, "inla")
+})
+
+test_that("outcomes are linked to all long responses; scaled() only sets parameters", {
+  f <- collectFormulas(list(y ~ 1, z ~ t + scaled(x2, hyper = list(beta = list(initial = 1)))),
+                       list(x1 ~ t + (1 | id), x2 ~ age))
+  expect_equal(vapply(f$out$y$scaled, `[[`, "", "target"), c("x1", "x2"))
+  expect_equal(f$out$z$scaled[[2]]$params, list(hyper = list(beta = list(initial = 1))))
+  expect_equal(f$out$z$scaled[[1]]$params, list())
+  # the outcome data must contain the variables of all long formulae
+  expect_setequal(f$out$y$linkVariables, c("t", "id", "age"))
+  expect_setequal(f$out$z$linkVariables, c("id", "age"))
+  d <- data.frame(id = 1:3, t = 1:3, age = 1:3, x1 = 0, x2 = 0, y = 0, z = 0)
+  expect_error(prepareData(d[, names(d) != "age"], d, f), "not found in `dataOut`: age")
+
+  expect_error(collectFormulas(y ~ scaled(x1) + scaled(x1), x1 ~ t), "more than once for: x1")
 })

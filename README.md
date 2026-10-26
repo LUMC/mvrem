@@ -11,10 +11,12 @@ Models are written in familiar lme4-style formulae, extended with:
 
 - `re(1 + t | id, ...)` — random effects with extra (prior) parameters; `|` correlated,
   `||` uncorrelated; plain `(1 + t | id)` is also accepted;
-- `scaled(x1, ...)` — in an outcome formula, the (scaled) linear predictor of the
+- `scaled(x1, ...)` — in an outcome formula, parameters of the association with the
   longitudinal submodel `x1`.
 
-In both, the other named `...` arguments are passed to INLA's `f()`, e.g. `scaled(x1, hyper = list(beta =
+Every outcome is associated with every longitudinal submodel through a scaled copy of its linear
+predictor; `scaled()` is only needed for non-default parameters of that association. In both
+`re()` and `scaled()`, the other named `...` arguments are passed to INLA's `f()`, e.g. `scaled(x1, hyper = list(beta =
 list(prior = "normal", param = c(0, 0.01))))`.
 
 > **Status:** under development. Model specification, data preparation and construction of
@@ -69,8 +71,9 @@ with INLA, `lme4` and `devtools` already installed:
 
 ## Example
 
-A beta-distributed outcome `y` associated with the trajectory of a longitudinal marker `x1`,
-with priors on the random effects:
+A beta-distributed outcome `y` associated with the trajectory of a longitudinal marker `x1`
+(automatically, no `scaled()` needed), with priors on the random effects and on the beta
+precision:
 
 ```r
 library(mvrem)
@@ -87,10 +90,10 @@ d$y  <- plogis(-1 + 0.3 * d$t + 0.8 * (d$x1 - 1) +
 
 # 1. parse the formulae
 forms <- collectFormulas(
-  formOut   = list(y ~ 1 + t + re(1 | id, prior = pcSd(u = 1)) + scaled(x1)),
+  formOut   = list(y ~ 1 + t + re(1 | id, prior = pcSd(u = 1))),
   formLong  = list(x1 ~ 1 + t + re(1 + t | id,
                                   prior = wishartPrec(df = 4, scale = diag(c(1, 0.1))))),
-  familyOut = c(y = "beta")
+  familyOut = list(y = betaFamily(phi = gammaPrec(1, 0.1)))
 )
 
 # 2. assign the data to the formulae (variables selected, incomplete rows dropped)
@@ -104,7 +107,8 @@ formatInlaFormula(inl, nrows = 2)
 ```r
 MX ~ -1 +
    #
-   # ----- y: y ~ 1 + t + re(1 | id, prior = pcSd(u = 1)) + scaled(x1) -----
+   # ----- y: y ~ 1 + t + re(1 | id, prior = pcSd(u = 1)) -----
+   # family = "beta", control.family = list(hyper = list(phi = list(prior = "loggamma", param = c(1, 0.1))))
    #
    #    y_y y_1 y_t   y_1_id   y_FROM_x1_id_t
    #  0.241   1 0.0 y|1|S001   x1|TO|y|S001|0
@@ -116,6 +120,8 @@ f(y_1_id, model = "iid", values = LEVELS$y_1_id, n = length(LEVELS$y_1_id), hype
 f(y_FROM_x1_id_t, copy = "x1_TO_y_id_t", hyper = list(beta = list(fixed = FALSE, prior = "normal", param = c(0, 0.01)))) +
    #
    # ----- x1: x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 4, scale = diag(c(1, 0.1)))) -----
+   # family = "gaussian"
+   # zero equations: family = "gaussian", control.family = list(hyper = list(prec = list(initial = 10, fixed = TRUE)))
    #
    #  x1_x1 x1_x1_0eq x1_1 x1_t   x1_1_id   x1_t_id x1_WEIGHT     x1_TO_y_id_t
    #  0.766        NA    1  0.0 x1|1|S001 x1|t|S001        NA             <NA>
@@ -127,7 +133,7 @@ x1_1 +
 x1_t +
 f(x1_1_id, model = "iid2d", values = LEVELS$x1_1_t_id, n = length(LEVELS$x1_1_t_id), hyper = list(theta1 = list(prior = "wishart2d", param = c(4, 1, 10, 0)))) +
 f(x1_t_id, x1_t, copy = "x1_1_id") +
-f(x1_TO_y_id_t, x1_WEIGHT, model = "iid", values = LEVELS$x1_TO_y_id_t, hyper = list())
+f(x1_TO_y_id_t, x1_WEIGHT, model = "iid", values = LEVELS$x1_TO_y_id_t, hyper = list(prec = list(initial = -6, fixed = TRUE)))
 ```
 
 The model equations as LaTeX (body of an `aligned` environment):
@@ -140,22 +146,62 @@ $$
 \begin{aligned}
 x_{1,i} &= \beta^{(x_{1})}_{0} + \beta^{(x_{1})}_{1}\, t_{i} + b^{(x_{1})}_{0,\mathrm{id}[i]} + b^{(x_{1})}_{1,\mathrm{id}[i]}\, t_{i} + \varepsilon^{(x_{1})}_{i} \\
 0 &= \beta^{(x_{1})}_{0} + \beta^{(x_{1})}_{1}\, t + b^{(x_{1})}_{0,\mathrm{id}} + b^{(x_{1})}_{1,\mathrm{id}}\, t - u^{(x_{1} \to y)}_{\mathrm{id},t}, \quad \left(\mathrm{id}, t\right) \in \mathcal{D}_{y} \\
-g_{y}\left(\mathrm{E}\left[y_{i}\right]\right) &= \beta^{(y)}_{0} + \beta^{(y)}_{1}\, t_{i} + b^{(y)}_{0,\mathrm{id}[i]} + \gamma_{y,x_{1}}\,u^{(x_{1} \to y)}_{\mathrm{id}[i],t_{i}} \\
+\operatorname{logit}\left(\mu^{(y)}_{i}\right) &= \beta^{(y)}_{0} + \beta^{(y)}_{1}\, t_{i} + b^{(y)}_{0,\mathrm{id}[i]} + \gamma_{y,x_{1}}\,u^{(x_{1} \to y)}_{\mathrm{id}[i],t_{i}} \\
 \varepsilon^{(x_{1})}_{i} &\sim \mathcal{N}\left(0, \left(\tau^{(x_{1})}_{\varepsilon}\right)^{-1}\right) \\
 \left(b^{(x_{1})}_{0,l}, b^{(x_{1})}_{1,l}\right)^\top &\sim \mathcal{N}\left(\mathbf{0}, \left(\mathbf{Q}^{(x_{1})}_{\mathrm{id}}\right)^{-1}\right), \quad l = 1, \ldots, n_{\mathrm{id}} \\
 \mathbf{Q}^{(x_{1})}_{\mathrm{id}} &\sim \mathcal{W}_{2}\left(4, \begin{pmatrix}1 & 0 \\ 0 & 0.1\end{pmatrix}\right) \\
-y_{i} &\sim \mathrm{beta} \\
+y_{i} &\sim \mathrm{Beta}\left(\mu^{(y)}_{i}\, \phi^{(y)}, \left(1 - \mu^{(y)}_{i}\right) \phi^{(y)}\right) \\
+\phi^{(y)} &\sim \mathrm{Gamma}\left(1, 0.1\right) \\
 b^{(y)}_{0,l} &\sim \mathcal{N}\left(0, \left(\tau^{(y)}_{0,\mathrm{id}}\right)^{-1}\right), \quad l = 1, \ldots, n_{\mathrm{id}} \\
 \left(\tau^{(y)}_{0,\mathrm{id}}\right)^{-1/2} &\sim \mathrm{Exp}\left(4.61\right), \quad P\left(\left(\tau^{(y)}_{0,\mathrm{id}}\right)^{-1/2} > 1\right) = 0.01 \\
 u^{(x_{1} \to y)}_{\mathrm{id},t} &\sim \mathcal{N}\left(0, \left(\tau_{x_{1} \to y}\right)^{-1}\right)
 \end{aligned}
 $$
 
+## Likelihood families
+
+The family of each response is given in `familyOut` / `familyLong` as a named list of family
+objects (unlisted responses are Gaussian). A constructor sets the INLA likelihood, the link
+and the priors of the family's hyperparameters, i.e. INLA's `control.family`:
+
+| Function | INLA likelihood | Hyperparameters | Left-hand side |
+|---|---|---|---|
+| `gaussianFamily(prec, link)` | `gaussian` | residual precision | |
+| `studentTFamily(prec, dof)` | `t` | precision, degrees of freedom | |
+| `lognormalFamily(prec)` | `lognormal` | precision of $\log y$ | |
+| `gammaFamily(prec, link)` | `gamma` | precision $\phi$ | |
+| `betaFamily(phi, link)` | `beta` | precision $\phi$ | |
+| `poissonFamily(link)` | `poisson` | | `y \| exposure(E) ~ ...` |
+| `negBinomialFamily(size, link)` | `nbinomial` | size | `y \| exposure(E) ~ ...` |
+| `binomialFamily(link)` | `binomial` | | `y \| trials(n) ~ ...` (default: Bernoulli) |
+| `betaBinomialFamily(rho, link)` | `betabinomial` | overdispersion | `y \| trials(n) ~ ...` |
+| `zeroInflatedPoissonFamily(type, prob)` | `zeroinflatedpoisson0/1` | zero probability | `y \| exposure(E) ~ ...` |
+| `zeroInflatedNegBinomialFamily(type, size, prob)` | `zeroinflatednbinomial0/1` | size, zero probability | `y \| exposure(E) ~ ...` |
+| `inlaFamily(family, link, hyper)` | any other (non-survival) | any | both |
+
+Hyperparameters take a prior function (`gammaPrec()`, `pcSd()`, ... for precisions) or a raw
+INLA entry such as `list(initial = log(100), fixed = TRUE)`; `control = list(...)` adds other
+`control.family` entries. An INLA name (`familyOut = c(y = "beta")`) is short for the
+constructor with its defaults. Responses are checked against the family (e.g. beta in (0, 1),
+binomial counts between 0 and `trials()`).
+
+```r
+collectFormulas(
+  formOut  = list(k | trials(n) ~ t + (1 | id)),
+  formLong = list(x1 ~ t + (1 + t | id), cnt | exposure(pt) ~ t + (1 | id)),
+  familyOut  = list(k = binomialFamily(link = "probit")),
+  familyLong = list(x1 = gaussianFamily(prec = pcSd(u = 1)),
+                    cnt = negBinomialFamily(size = gammaPrec(1, 0.1)))
+)
+```
+
+Survival likelihoods (`weibullsurv`, `coxph`, ...) are not supported yet.
+
 More examples (data lists, missing values, naming schemes, validation errors) are in
 `CODE_EXAMPLES.Rmd` / `CODE_EXAMPLES.html`.
 
 ## Priors of random effects
-The random effects are assumed to follow a Gaussian distribution $mathbf{b}_i \sim N(0, $\methbf{D}$)$, where $\mathbf{D}$ denotes the variance-covariance matrix of the random effects. In the case of a single random effect $k = 1$ (e.g., a random intercept or a random slope only), $\mathbf{D}$ reduces to a scalar variance. 
+The random effects are assumed to follow a Gaussian distribution $\mathbf{b}_i \sim N(0, $\methbf{D}$)$, where $\mathbf{D}$ denotes the variance-covariance matrix of the random effects. In the case of a single random effect $k = 1$ (e.g., a random intercept or a random slope only), $\mathbf{D}$ reduces to a scalar variance. 
 The prior of a random-effect variance-covariance matrix $\mathbf{D}$ is given in `re()` with `prior =` and one of these
 functions. Each name says the distribution and the quantity it applies to (precision
 $\tau$, standard deviation $\sigma = \tau^{-1/2}$, or the precision matrix $\mathbf{Q}$):

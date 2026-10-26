@@ -8,7 +8,7 @@ forms <- collectFormulas(
 )
 d <- data.frame(id = rep(1:3, each = 2), site = rep(c("a", "b"), 3), t = rep(0:1, 3),
                 g = factor(rep(c("u", "v", "w"), 2)), age = 1:6,
-                x1 = 1, x2 = 1, x3 = 1, z = 1, y = 0.5)
+                x1 = 1, x2 = 1, x3 = 1, z = 1, y = 2)   # log(y) in (0, 1) (beta)
 dat <- prepareData(d, d, forms)
 
 lines <- function(x) strsplit(unclass(x), " \\\\\n", fixed = TRUE)[[1]]
@@ -44,12 +44,12 @@ test_that("correlated block gives a multivariate normal", {
 
 test_that("outcome: link, transformed response and scaled terms", {
   tex <- latexEquation(forms$out$y)
-  expect_match(tex, "g_{y}\\left(\\mathrm{E}\\left[\\log\\left(y_{i}\\right)\\right]\\right) &=",
-               fixed = TRUE)
+  expect_match(tex, "\\operatorname{logit}\\left(\\mu^{(y)}_{i}\\right) &=", fixed = TRUE)
   expect_match(tex, "\\gamma_{y,x_{1}}\\,u^{(x_{1} \\to y)}_{i} + \\gamma_{y,x_{2}}\\,u^{(x_{2} \\to y)}_{i}",
                fixed = TRUE)
   expect_false(grepl("varepsilon", tex))
-  expect_match(tex, "\\log\\left(y_{i}\\right) &\\sim \\mathrm{beta}", fixed = TRUE)
+  expect_match(tex, paste0("\\log\\left(y_{i}\\right) &\\sim \\mathrm{Beta}\\left(\\mu^{(y)}_{i}\\, ",
+                           "\\phi^{(y)}, \\left(1 - \\mu^{(y)}_{i}\\right) \\phi^{(y)}\\right)"), fixed = TRUE)
 })
 
 test_that("gaussian family: identity and residual; standalone formulae", {
@@ -65,25 +65,27 @@ test_that("gaussian family: identity and residual; standalone formulae", {
 
   fp <- collectFormulas(y ~ t, n ~ t, familyLong = c(n = "poisson"))
   tex <- latexEquation(fp$long$n)
-  expect_match(tex, "g_{n}\\left(\\mathrm{E}\\left[n_{i}\\right]\\right)", fixed = TRUE)
-  expect_match(tex, "n_{i} &\\sim \\mathrm{poisson}", fixed = TRUE)
+  expect_match(tex, "\\log\\left(\\lambda^{(n)}_{i}\\right) &=", fixed = TRUE)
+  expect_match(tex, "n_{i} &\\sim \\mathrm{Poisson}\\left(\\lambda^{(n)}_{i}\\right)", fixed = TRUE)
 })
 
 test_that("zero equations: linear predictor of the long submodel minus u", {
   l <- lines(latexEquation(forms, dat))
-  z1 <- l[grepl("^0 &= ", l)][1]
+  z1 <- l[startsWith(l, "0 &= ") & grepl("x_{1} \\to y", l, fixed = TRUE)]
   # indexed by the values of the matching variables (id, t), not by observation
   expect_equal(z1, paste0(
     "0 &= \\beta^{(x_{1})}_{0} + \\beta^{(x_{1})}_{1}\\, t + b^{(x_{1})}_{1,\\mathrm{id}}\\, t",
     " + b^{(x_{1})}_{0,\\mathrm{id}} - u^{(x_{1} \\to y)}_{\\mathrm{id},t},",
     " \\quad \\left(\\mathrm{id}, t\\right) \\in \\mathcal{D}_{y}"))
   # the outcome uses u at its own values of id and t
-  expect_match(l[grepl("^g_\\{y\\}", l)],
+  expect_match(l[grepl("^\\\\operatorname\\{logit\\}", l)],
                "\\gamma_{y,x_{1}}\\,u^{(x_{1} \\to y)}_{\\mathrm{id}[i],t_{i}}", fixed = TRUE)
   expect_false(grepl("varepsilon", z1))
-  # no zero equations without scaled() / for a single formula
+  # every (long, out) pair is linked, also without scaled(); none for a single formula
   f0 <- collectFormulas(y ~ t, x ~ t)
-  expect_false(any(grepl("^0 &=", lines(latexEquation(f0)))))
+  l0 <- lines(latexEquation(f0))
+  expect_equal(sum(grepl("^0 &=", l0)), 1L)
+  expect_match(l0[grepl("^y_\\{i\\} &= ", l0)], "\\gamma_{y,x}\\,u^{(x \\to y)}_{t_{i}}", fixed = TRUE)
   expect_false(grepl("0 &=", latexEquation(forms$out$y), fixed = TRUE))
 })
 
@@ -106,17 +108,18 @@ test_that("covariate expressions and data-based factor expansion", {
 test_that("whole model: equations first, then distributions", {
   tex <- latexEquation(forms, dat)
   l <- lines(tex)
-  expect_length(l, 5 + 2 + 1 + 4 + 7 + 2)  # equations, zero eqs, family, residuals, REs, u
+  # equations, zero eqs (2 outcomes x 3 long), family, residuals, REs, u
+  expect_length(l, 5 + 6 + 1 + 4 + 7 + 6)
   # longitudinal equations, zero equations, outcome equations, distributions
   expect_match(l[1], "\nx_\\{1,i\\} &=")
   expect_match(l[3], "^x_\\{3,i\\} &=")
-  expect_match(l[4:5], "^0 &= ")
-  expect_match(l[6], "z_{i} &=", fixed = TRUE)
-  expect_match(l[7], "^g_\\{y\\}")
-  expect_true(all(grepl("\\\\sim", l[8:21])))
-  expect_match(l[8], "^\\\\varepsilon\\^\\{\\(x_\\{1\\}\\)\\}")   # long distributions first
-  expect_match(l[20:21], "\\\\left\\(\\\\tau_\\{x_\\{[12]\\} \\\\to y\\}\\\\right\\)\\^\\{-1\\}")
-  expect_match(l[20:21], "^u\\^\\{\\(x_\\{[12]\\} \\\\to y\\)\\}_\\{\\\\mathrm\\{id\\},t\\} &\\\\sim")
+  expect_match(l[4:9], "^0 &= ")
+  expect_match(l[10], "z_{i} &=", fixed = TRUE)
+  expect_match(l[11], "^\\\\operatorname\\{logit\\}")
+  expect_true(all(grepl("\\\\sim", l[12:29])))
+  expect_match(l[12], "^\\\\varepsilon\\^\\{\\(x_\\{1\\}\\)\\}")   # long distributions first
+  expect_match(l[24:29], "\\\\left\\(\\\\tau_\\{x_\\{[123]\\} \\\\to [yz]\\}\\\\right\\)\\^\\{-1\\}")
+  expect_match(l[24:29], "^u\\^\\{\\(x_\\{[123]\\} \\\\to [yz]\\)\\}_\\{")
   expect_equal(latexEquation(forms), latexEquation(forms, NULL))
 })
 

@@ -21,6 +21,7 @@ line), printed with \code{cat()}.
 \description{
 Formats the INLA formula built by \code{\link[=buildInlaFormula]{buildInlaFormula()}} one term per line,
 grouped by response. Each group is preceded by a comment with the user's
-formula and the first rows of the corresponding stacked data (observation
+formula, the likelihood family and \code{control.family} (also of the zero
+equations of a longitudinal response) and the first rows of the corresponding stacked data (observation
 rows and, for longitudinal responses, zero-equation rows).
 }

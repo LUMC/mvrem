@@ -5,7 +5,7 @@
 #' missing value in the variables used by the formula; these are the rows kept
 #' by [prepareData()] with `na.action = na.omit`), the number of groups per
 #' grouping term among the complete rows, the missing values per variable and
-#' the number of zero equations per `scaled()` pair.
+#' the number of zero equations per (longitudinal, outcome) pair.
 #'
 #' @param forms Result of [collectFormulas()].
 #' @param dataOut,dataLong Data as for [prepareData()]: one data frame per part
@@ -17,7 +17,7 @@
 #'   * `missing`: one row per equation and variable used by it, with `part`,
 #'     `response`, `variable` and `missing` (number of missing values among the
 #'     supplied rows),
-#'   * `zero`: one row per `scaled()` pair with `long`, `out`, `vars`
+#'   * `zero`: one row per (longitudinal, outcome) pair with `long`, `out`, `vars`
 #'     (matching variables) and `rows` (zero equations = unique combinations of
 #'     the matching variables in the complete outcome rows).
 #' @export
@@ -40,7 +40,7 @@ summarizeData <- function(forms, dataOut, dataLong) {
             collapse = ", ")
     } else ""
     eqRows[[length(eqRows) + 1L]] <- data.frame(
-      part = part, response = r, family = if (is.null(p$family)) defaultFamily else p$family,
+      part = part, response = r, family = if (is.null(p$family)) defaultFamily()$family else p$family$family,
       rows = nrow(df), complete = nrow(pd), dropped = nrow(df) - nrow(pd), groups = groups
     )
     vars <- unique(c(unlist(p$variables, use.names = FALSE), p$linkVariables))
