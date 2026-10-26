@@ -140,7 +140,8 @@ collectVariables <- function(lhs, fixed, re) {
 #'
 #' @param formula A two-sided formula. Random effects may be given in lme4
 #'   notation, `(1 + t | id)`, or as `re(1 + t | id, ...)` where `...` holds extra
-#'   (named) parameters. Outcome formulae may contain `scaled(x, ...)` terms.
+#'   (named) parameters, e.g. `prior = pcSd(u = 1)` (see [priors]). Outcome
+#'   formulae may contain `scaled(x, ...)` terms.
 #' @param part Either `"out"` (outcome) or `"long"` (longitudinal).
 #' @return A list with elements
 #'   * `response`: name of the response variable (e.g. `y` for `log(y) ~ ...`);
@@ -156,7 +157,8 @@ collectVariables <- function(lhs, fixed, re) {
 #'   * `lme4Formula`: formula with `re()` replaced by lme4 bar terms and `scaled()` removed,
 #'   * `re`: list of random-effect blocks, each with `term` (the lme4 bar expression),
 #'     `group` (grouping factor name), `correlated` (`FALSE` for `||`) and
-#'     `params` (named list of extra arguments, evaluated in the formula environment),
+#'     `params` (named list of extra arguments, evaluated in the formula environment)
+#'     and `prior` (the `prior` argument, see [priors], or `NULL`),
 #'   * `scaled`: (outcome formulae only) list of associations, each with `target`
 #'     (longitudinal response name) and `params`.
 #' @export
@@ -236,12 +238,13 @@ isBar <- function(e) {
   is.call(e) && (identical(e[[1L]], quote(`|`)) || identical(e[[1L]], quote(`||`)))
 }
 
-makeReBlock <- function(bar, params) {
+makeReBlock <- function(bar, params, prior = NULL) {
   list(
     term = bar,
     group = deparse1(bar[[3L]]),
     correlated = identical(bar[[1L]], quote(`|`)),
-    params = params
+    params = params,
+    prior = prior
   )
 }
 
@@ -263,7 +266,15 @@ parseRe <- function(e, env, response) {
   if (!is.null(names(args)) && names(args)[1L] != "")
     stop("The first argument of re() must not be named (formula for '", response, "').",
          call. = FALSE)
-  makeReBlock(args[[1L]], extraParams(args[-1L], env, "re", response))
+  params <- extraParams(args[-1L], env, "re", response)
+  prior <- params[["prior"]]
+  params <- params[names(params) != "prior"]
+  if (!length(params)) params <- list()
+  if (!is.null(prior) && !inherits(prior, "mvremPrior"))
+    stop("`prior` in re() must be created by a prior constructor (gammaPrec(), pcSd(), ",
+         "halfNormalSd(), halfCauchySd(), wishartPrec()); raw INLA settings go in `hyper` ",
+         "(formula for '", response, "').", call. = FALSE)
+  makeReBlock(args[[1L]], params, prior)
 }
 
 parseScaled <- function(e, env, response) {
@@ -275,10 +286,11 @@ parseScaled <- function(e, env, response) {
   if (!is.null(names(args)) && names(args)[1L] != "")
     stop("The first argument of scaled() must not be named (formula for '", response,
          "').", call. = FALSE)
-  list(
-    target = as.character(x),
-    params = extraParams(args[-1L], env, "scaled", response)
-  )
+  params <- extraParams(args[-1L], env, "scaled", response)
+  if ("prior" %in% names(params))
+    stop("`prior` is not supported in scaled() yet (formula for '", response, "').",
+         call. = FALSE)
+  list(target = as.character(x), params = params)
 }
 
 buildFormula <- function(lhs, terms, env) {

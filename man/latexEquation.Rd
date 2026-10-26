@@ -45,4 +45,8 @@ equations, zero equations, outcome equations, then the distributions
 finally those of \eqn{u}. Normal distributions are parametrised by
 precision, as in INLA: \eqn{\mathcal{N}(0, \tau^{-1})} and
 \eqn{\mathcal{N}(\mathbf{0}, \mathbf{Q}^{-1})}.
+A \code{prior} of a random-effect block (see \link{priors}) adds a line after the
+block's distribution, e.g. \eqn{(\tau)^{-1/2} \sim \mathrm{Exp}(\lambda)} or
+\eqn{\mathbf{Q} \sim \mathcal{W}_k(df, \mathbf{V})}; blocks without
+\code{prior} (INLA's default) get none.
 }

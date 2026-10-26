@@ -59,8 +59,10 @@ namingScheme <- function(...) {
 #' * **scaled** (outcome responses): `y_FROM_x1_id_t`, a scaled copy of the
 #'   corresponding zero-equation field.
 #'
-#' Parameters given in `re(...)` / `scaled(...)` override the defaults
-#' (nested lists such as `hyper` are merged).
+#' A `prior` given in `re(...)` (see [priors]) sets the `hyper` argument of the
+#' block's term. Other parameters given in `re(...)` / `scaled(...)` override
+#' the defaults (nested lists such as `hyper` are merged; a warning is given when
+#' `hyper` replaces the distribution set by `prior`).
 #'
 #' @param forms Result of [collectFormulas()].
 #' @param data Result of [prepareData()].
@@ -326,14 +328,17 @@ randomTerms <- function(p, df, groups, nm) {
     weight <- ifelse(effects == "(Intercept)", NA_character_,
                      fillName(nm$fixed, resp = r, term = labels))
     valuesOf <- function(e) fillValue(nm$reValue, resp = r, term = labels[e], level = lev)
+    checkBlockPrior(blk$prior, k, blk$correlated, blk$term)
+    hyper <- if (!is.null(blk$prior)) list(hyper = priorHyper(blk$prior, k))
+    warnHyperOverride(hyper$hyper, blk$params[["hyper"]], blk$term)
 
     if (k == 1L || !blk$correlated) {
       levName <- vapply(seq_len(k), function(e)
         fillName(nm$reLevels, resp = r, terms = labels[e], group = blk$group), "")
       terms <- lapply(seq_len(k), function(e)
         fTerm(index[e], weight[e],
-              list(model = "iid", values = levelsRef(nm, levName[e]),
-                   n = call("length", levelsRef(nm, levName[e]))),
+              c(list(model = "iid", values = levelsRef(nm, levName[e]),
+                     n = call("length", levelsRef(nm, levName[e]))), hyper),
               blk$params))
       values <- lapply(seq_len(k), valuesOf)
       out <- lapply(seq_len(k), function(e)
@@ -349,7 +354,7 @@ randomTerms <- function(p, df, groups, nm) {
     defaults <- list(model = model)
     if (model == "iidkd") defaults$order <- k
     defaults <- c(defaults, list(values = levelsRef(nm, levName),
-                                 n = call("length", levelsRef(nm, levName))))
+                                 n = call("length", levelsRef(nm, levName))), hyper)
     first <- fTerm(index[1L], weight[1L], defaults, blk$params)
     copies <- lapply(seq_len(k)[-1L], function(e)
       fTerm(index[e], weight[e], list(copy = index[1L]), list()))
@@ -358,6 +363,17 @@ randomTerms <- function(p, df, groups, nm) {
               values = unlist(lapply(seq_len(k), valuesOf))))
   })
   unlist(blocks, recursive = FALSE)
+}
+
+# Warn when a user `hyper` replaces the distribution set by `prior`.
+warnHyperOverride <- function(fromPrior, user, term) {
+  if (is.null(fromPrior) || !is.list(user)) return(invisible())
+  over <- names(fromPrior)[vapply(names(fromPrior), function(h)
+    is.list(user[[h]]) && any(c("prior", "param") %in% names(user[[h]])), NA)]
+  if (length(over))
+    warning("`hyper` overrides the `prior` of block `", deparse1(term), "` (",
+            paste(over, collapse = ", "), ").", call. = FALSE)
+  invisible()
 }
 
 # f(index, [weight], ...) call; user parameters override defaults by name.

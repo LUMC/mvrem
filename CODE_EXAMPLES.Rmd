@@ -86,7 +86,8 @@ p$variables
 parameters are collected separately. Targets are not data variables.
 
 ```{r}
-p <- parseJsmFormula(y ~ 1 + t + re(1 + t | id) + scaled(x1, prior = "normal") + scaled(x2),
+p <- parseJsmFormula(y ~ 1 + t + re(1 + t | id) + scaled(x1, hyper = list(beta = list(initial = 1))) +
+                       scaled(x2),
                      part = "out")
 p$lme4Formula
 str(p$scaled)
@@ -106,7 +107,7 @@ p$lme4Formula
 forms <- collectFormulas(
   formOut = list(
     z ~ 1 + t + (1 + t | id),
-    y ~ 1 + t + re(1 + t | id, hyper = myHyper) + scaled(x1) + scaled(x2, prior = "normal")
+    y ~ 1 + t + re(1 + t | id, hyper = myHyper) + scaled(x1) + scaled(x2, hyper = list(beta = list(initial = 1)))
   ),
   formLong = list(
     x1 ~ 1 + t + re(0 + t | id) + re(1 | id),
@@ -362,6 +363,209 @@ The whole model (equations first, then random-effect distributions):
 
 ```{r, results = "asis"}
 cat(format(latexEquation(forms, prepareData(d, d, forms)), delim = "$$"))
+```
+
+## Priors for random effects — `re(..., prior = )`
+
+A random-effect block gets its prior with `prior =` and one of the constructors
+below. Each name tells the distribution and the quantity it is placed on:
+the precision $\tau$, the standard deviation $\sigma = \tau^{-1/2}$, or the
+precision matrix $\mathbf{Q}$ of a correlated block.
+
+| Constructor | Meaning | INLA |
+|---|---|---|
+| `gammaPrec(shape = 1, rate = 5e-5)` | $\tau \sim \mathrm{Gamma}(shape, rate)$ | `loggamma` |
+| `pcSd(u, alpha = 0.01)` | $P(\sigma > u) = \alpha$, i.e. $\sigma \sim \mathrm{Exp}(-\log(\alpha)/u)$ | `pc.prec` |
+| `halfNormalSd(scale)` | $\sigma \sim \mathcal{N}^{+}(0, scale^2)$ | `logtnormal` |
+| `halfCauchySd(scale)` | $\sigma \sim \mathrm{C}^{+}(0, scale)$ | `expression:` |
+| `wishartPrec(df = k + 2, scale = 1)` | $\mathbf{Q} \sim \mathcal{W}_k(df, \mathbf{V})$, $\mathrm{E}[\mathbf{Q}] = df\,\mathbf{V}$ | `wishart<k>d` / `wishartkd`, $\mathbf{R} = \mathbf{V}^{-1}$ |
+
+Scalar priors are for single effects and uncorrelated (`||`) blocks (the same
+prior for every effect of the block); a correlated block with $k > 1$ effects
+accepts only `wishartPrec()`. Blocks without `prior` keep INLA's default.
+
+```{r}
+pcSd(u = 1)
+gammaPrec()
+halfNormalSd(scale = 0.5)
+halfCauchySd(scale = 25)
+wishartPrec(df = 4, scale = diag(c(1, 0.1)))
+```
+
+A helper showing only the random-effect terms of the INLA formula:
+
+```{r}
+reTerms <- function(formLong, formOut = y ~ t) {
+  f <- collectFormulas(formOut, formLong)
+  inl <- buildInlaFormula(f, prepareData(d, d, f))
+  terms <- unlist(lapply(inl$random, lapply, function(b) b$terms))
+  cat(vapply(terms, deparse1, "", width.cutoff = 500L), sep = "\n")
+}
+```
+
+### One prior of each kind, single effect
+
+```{r, class.output = "r", comment = ""}
+reTerms(list(
+  x1 ~ 1 + t + re(1 | id, prior = gammaPrec(shape = 1, rate = 0.01)),  # tau ~ Gamma(1, 0.01)
+  x2 ~ 1 + t + re(1 | id, prior = pcSd(u = 2)),                         # P(sigma > 2) = 0.01
+  x3 ~ 1 + t + re(1 | id, prior = pcSd(u = 0.5, alpha = 0.05)),         # P(sigma > 0.5) = 0.05
+  z  ~ 1 + t + re(1 | id, prior = halfNormalSd(scale = 1))              # sigma ~ N+(0, 1)
+))
+```
+
+The half-Cauchy prior is written as an INLA `expression:` on
+$\theta = \log \tau$ (density of $\sigma$ times the Jacobian):
+
+```{r, class.output = "r", comment = ""}
+reTerms(x1 ~ 1 + t + re(1 | id, prior = halfCauchySd(scale = 25)))     # sigma ~ C+(0, 25)
+```
+
+### Random slopes
+
+```{r, class.output = "r", comment = ""}
+# slope only; weighted by the t column as usual
+reTerms(x1 ~ 1 + t + re(0 + t | id, prior = halfNormalSd(scale = 0.2)))
+
+# uncorrelated intercept and slope, same prior for both
+reTerms(x1 ~ 1 + t + re(1 + t || id, prior = pcSd(u = 1)))
+
+# uncorrelated, a different prior per effect: split the block
+reTerms(x1 ~ 1 + t + re(1 | id, prior = pcSd(u = 1)) + re(0 + t | id, prior = pcSd(u = 0.1)))
+```
+
+### Correlated blocks: Wishart
+
+The scale $\mathbf{V}$ is the usual Wishart scale ($\mathrm{E}[\mathbf{Q}] = df\,\mathbf{V}$);
+INLA's parameter is $\mathbf{R} = \mathbf{V}^{-1}$, given as
+`c(df, diag(R), R12, R13, ..., R23, ...)`.
+
+```{r, class.output = "r", comment = ""}
+# 2d, defaults: df = k + 2 = 4, scale = I
+reTerms(x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec()))
+
+# scalar scale = 0.5 * I
+reTerms(x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 5, scale = 0.5)))
+
+# diagonal scale: intercept and slope on different scales
+reTerms(x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 4, scale = diag(c(1, 0.1)))))
+
+# full scale matrix (prior guess with a positive correlation)
+V <- matrix(c(1, 0.3, 0.3, 0.5), 2)
+reTerms(x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 6, scale = V)))
+
+# k = 3 -> iid3d
+reTerms(x1 ~ 1 + t + I(t^2) + re(1 + t + I(t^2) | id,
+                                 prior = wishartPrec(df = 5, scale = diag(c(1, 0.5, 0.1)))))
+
+# the old reference default c(3, 1, 0.004, 0) is V = diag(1, 250), but INLA requires df > k + 1
+reTerms(x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 3, scale = diag(c(1, 250)))))
+reTerms(x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 4, scale = diag(c(1, 250)))))
+```
+
+### Factor in the random-effect term
+
+The number of effects $k$ is known only with the data (factor levels expand),
+so the Wishart dimension is checked when building the INLA formula:
+
+```{r, class.output = "r", comment = ""}
+# site has 2 levels -> effects (Intercept), siteB -> k = 2 -> iid2d
+reTerms(x1 ~ 1 + t + re(1 + site | id, prior = wishartPrec(scale = diag(2))))
+reTerms(x1 ~ 1 + t + re(1 + site | id, prior = wishartPrec(scale = diag(3))))
+```
+
+### Priors stored in variables or built in code
+
+Extra arguments are evaluated in the formula's environment, so prior objects
+can be reused:
+
+```{r, class.output = "r", comment = ""}
+pInt   <- pcSd(u = 1)
+pSlope <- halfNormalSd(scale = 0.1)
+reTerms(list(
+  x1 ~ 1 + t + re(1 | id, prior = pInt) + re(0 + t | id, prior = pSlope),
+  x2 ~ 1 + t + re(1 | id, prior = pInt)
+))
+
+# the same random-effect prior for several longitudinal markers
+markers <- c("x1", "x2", "x3")
+formLong <- lapply(markers, function(v)
+  reformulate(c("1", "t", "re(1 + t | id, prior = wishartPrec(df = 4))"), response = v))
+sapply(formLong, deparse1)
+reTerms(formLong)
+```
+
+### Full model
+
+```{r, class.output = "r", comment = ""}
+mP <- collectFormulas(
+  formOut = list(
+    y ~ 1 + t + re(1 | id, prior = halfCauchySd(scale = 5)) + scaled(x1) + scaled(x2)
+  ),
+  formLong = list(
+    x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 4, scale = diag(c(1, 0.1)))),
+    x2 ~ 1 + t + (1 | id),                       # lme4 notation -> INLA default prior
+    x3 ~ 1 + t + re(1 + t || id, prior = gammaPrec(1, 0.01))
+  ),
+  familyLong = c(x3 = "poisson")
+)
+datP <- prepareData(d, d, mP)
+formatInlaFormula(buildInlaFormula(mP, datP), nrows = 0)
+```
+
+In the LaTeX equations each prior adds a line after the distribution of its
+block (`x2` uses INLA's default and gets none):
+
+```{r, results = "asis"}
+cat(format(latexEquation(mP, datP), delim = "$$"))
+```
+
+Single formulae, with a PC and a half-normal prior:
+
+```{r, results = "asis"}
+fP <- collectFormulas(y ~ t, x3 ~ 1 + t + re(1 | id, prior = pcSd(u = 1)) +
+                        re(0 + t | id, prior = halfNormalSd(scale = 0.5)))
+cat(format(latexEquation(fP$long$x3), delim = "$$"))
+```
+
+### Combined with other `f()` arguments
+
+The prior sets `hyper`; other named arguments of `re()` are still passed to
+`f()`, and a `hyper` given explicitly is merged over the prior's.
+
+```{r, class.output = "r", comment = ""}
+# prior plus other f() arguments
+reTerms(x1 ~ 1 + t + re(1 | id, prior = pcSd(u = 1), constr = TRUE))
+
+# prior plus extra hyper fields: merged
+reTerms(x1 ~ 1 + t + re(1 | id, prior = pcSd(u = 1), hyper = list(prec = list(initial = 4))))
+
+# hyper replacing the prior itself: allowed (escape hatch), with a warning
+reTerms(x1 ~ 1 + t + re(1 | id, prior = pcSd(u = 1),
+                        hyper = list(prec = list(prior = "loggamma", param = c(1, 1)))))
+```
+
+### Errors
+
+```{r}
+# a correlated block needs wishartPrec()
+reTerms(x1 ~ 1 + t + re(1 + t | id, prior = pcSd(u = 1)))
+
+# wishartPrec() needs a correlated block
+reTerms(x1 ~ 1 + t + re(1 | id, prior = wishartPrec()))
+
+# raw INLA settings are not a prior (they go in `hyper`)
+parseJsmFormula(x1 ~ t + re(1 | id, prior = list(prior = "pc.prec", param = c(1, 0.01))))
+
+# invalid hyperparameters
+pcSd(u = 1, alpha = 1.5)
+halfNormalSd(scale = -1)
+wishartPrec(scale = matrix(c(1, 2, 2, 1), 2))
+
+# priors in scaled() are not supported yet
+collectFormulas(y ~ 1 + scaled(x1, prior = pcSd(1)), x1 ~ t + (1 | id))
+
+# lme4 notation cannot take a prior (`(1 + t | id, prior = pcSd(1))` is not valid R): use re()
 ```
 
 ## Validation errors

@@ -9,7 +9,8 @@ parseJsmFormula(formula, part = c("out", "long"))
 \arguments{
 \item{formula}{A two-sided formula. Random effects may be given in lme4
 notation, \code{(1 + t | id)}, or as \code{re(1 + t | id, ...)} where \code{...} holds extra
-(named) parameters. Outcome formulae may contain \code{scaled(x, ...)} terms.}
+(named) parameters, e.g. \code{prior = pcSd(u = 1)} (see \link{priors}). Outcome
+formulae may contain \code{scaled(x, ...)} terms.}
 
 \item{part}{Either \code{"out"} (outcome) or \code{"long"} (longitudinal).}
 }
@@ -29,7 +30,8 @@ and \code{group} (variables on the right of \code{|}, e.g. \code{id}, or \code{a
 \item \code{lme4Formula}: formula with \code{re()} replaced by lme4 bar terms and \code{scaled()} removed,
 \item \code{re}: list of random-effect blocks, each with \code{term} (the lme4 bar expression),
 \code{group} (grouping factor name), \code{correlated} (\code{FALSE} for \code{||}) and
-\code{params} (named list of extra arguments, evaluated in the formula environment),
+\code{params} (named list of extra arguments, evaluated in the formula environment)
+and \code{prior} (the \code{prior} argument, see \link{priors}, or \code{NULL}),
 \item \code{scaled}: (outcome formulae only) list of associations, each with \code{target}
 (longitudinal response name) and \code{params}.
 }

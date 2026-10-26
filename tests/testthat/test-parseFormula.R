@@ -4,7 +4,7 @@ test_that("collectFormulas parses the reference model specification", {
     formOut = list(
       z ~ 1 + t + (1 + t | id),
       y ~ 1 + t + re(1 + t | id, hyper = myHyper) +
-        scaled(x1, prior = "normal") + scaled(x2)
+        scaled(x1, hyper = list(beta = list(initial = 1))) + scaled(x2)
     ),
     formLong = list(
       x1 ~ 1 + t + re(0 + t | id, a = 1) + re(1 | id),
@@ -34,7 +34,7 @@ test_that("collectFormulas parses the reference model specification", {
 
   # scaled terms (outcome only)
   expect_equal(vapply(res$out$y$scaled, `[[`, "", "target"), c("x1", "x2"))
-  expect_equal(res$out$y$scaled[[1]]$params, list(prior = "normal"))
+  expect_equal(res$out$y$scaled[[1]]$params, list(hyper = list(beta = list(initial = 1))))
   expect_equal(res$out$z$scaled, list())
   expect_null(res$long$x1$scaled)
 

@@ -40,6 +40,7 @@ Syntax rules:
 - Extra arguments in `re()` / `scaled()` must be named; evaluated in the formula's environment.
   They are merged into the default `f()` arguments (`modifyList`, nested lists like `hyper`
   merged). User parameters are given ONLY this way — no `userPars` argument keyed by INLA names.
+- `re(..., prior = <constructor>)` sets the RE block's prior (see Priors below); not a `f()` arg.
 - `re()` / `scaled()` must be top-level additive terms (not nested in other calls).
 - LHS must contain exactly one variable (`log(y)` ok, `cbind(a, b)` not); that variable is the
   response name used everywhere (list names, `scaled()` targets, data list names).
@@ -65,7 +66,7 @@ Per formula (`parseJsmFormula(formula, part)`):
   `I(t^2)` -> `t`). Covariates: fixed terms + left of `|`; groups: right of `|`
   (`site:id` -> `site`, `id`). `scaled()` targets and params are not variables.
 - `re`: one entry per RE block (`re()` and plain `( | )` alike): `term`, `group`,
-  `correlated` (`FALSE` for `||`), `params`
+  `correlated` (`FALSE` for `||`), `params`, `prior` (`mvremPrior` or `NULL`; removed from `params`)
 - `scaled` (outcome only): `target`, `params`
 - `family` (set by `collectFormulas`): from `familyOut` / `familyLong` — named character
   vectors (names = response variables of that part, values = INLA likelihood names,
@@ -77,7 +78,8 @@ Per formula (`parseJsmFormula(formula, part)`):
 
 Errors: `scaled()` in long formula; unknown `scaled()` target; duplicate responses (also
 `y` and `log(y)`); LHS without exactly one variable; non-bar first arg of `re()`; non-name
-first arg of `scaled()`; unnamed extra args; nested `re()`/`scaled()`; one-sided formulae.
+first arg of `scaled()`; unnamed extra args; nested `re()`/`scaled()`; one-sided formulae;
+`prior` in `re()` not an `mvremPrior`; `prior` in `scaled()` (not supported yet).
 
 ### Step 2: data preparation — `R/prepareData.R`
 
@@ -119,7 +121,9 @@ scheme (user-provided reference, must be kept):
 Terms (formula grouped per response: outcomes first, then longitudinal):
 - fixed: one column per design-matrix column (factor levels expand)
 - random: `|` with k > 1 -> `iid<k>d` (`iidkd` + `order` for k > 5) on first effect, `copy`
-  for the others; single effect or `||` -> one `iid` per effect. Default prior: INLA's.
+  for the others; single effect or `||` -> one `iid` per effect. Without `prior`: INLA's
+  default (no `hyper`); with `prior`: `hyper = priorHyper(prior, k)` added to the defaults
+  (after `n`), then `params` merged (warning if user `hyper` sets `prior`/`param` of it).
 - zero equation, per (long, out) pair from `scaled()`: `f(x1_TO_y_id_t, x1_WEIGHT,
   model = "iid", values = LEVELS$x1_TO_y_id_t, hyper = list())`, i.e. `0 = eta_x1 - u`
 - scaled: `f(y_FROM_x1_id_t, copy = "x1_TO_y_id_t", hyper = list(beta = list(fixed = FALSE,
@@ -137,6 +141,29 @@ factor levels from the long data). Zero-eq rows: one per UNIQUE combination of `
 values in the outcome data (= `LEVELS$<zeroIndex>`); outcome rows are matched to them via these
 values (not `.key`), so combinations without a long observation (missing values, subjects
 absent from long data) still get a zero equation. Tested with artificially missing covariates.
+
+### Priors — `R/priors.R`
+
+Constructors (class `mvremPrior`: `dist`, `target` = `"prec"`/`"sd"`/`"precMatrix"`, `args`;
+`format`/`print` methods), args validated on construction:
+- `gammaPrec(shape = 1, rate = 5e-5)` -> `prec = list(prior = "loggamma", param = c(shape, rate))`
+- `pcSd(u, alpha = 0.01)` -> `"pc.prec"`, `c(u, alpha)` (sigma ~ Exp(-log(alpha)/u))
+- `halfNormalSd(scale)` -> `"logtnormal"`, `c(0, 1/scale^2)` (INLA: sd ~ N(mean, 1/prec) truncated)
+- `halfCauchySd(scale)` -> `prior = "expression: ..."` on theta = log tau (Jacobian log(sigma/2);
+  verified against logtnormal written the same way; INLA marks `expression:` as to be removed)
+- `wishartPrec(df = NULL, scale = 1)`: Q ~ W_k(df, V), E[Q] = df V; `df = NULL` -> k + 2, scalar
+  scale -> s I. -> `theta1 = list(prior = "wishart<k>d" / "wishartkd" (k > 5), param = c(df,
+  diag(R), R[lower.tri(R)]))`, R = V^-1 (order R12, R13, ..., R23, ... per INLA docs for k <= 5;
+  iidkd documented only for k = 3, assumed the same; INLA accepts the k = 6 vector).
+`checkBlockPrior()` (in `buildInlaFormula()` and `latexEquation()` with data, as k depends on
+factor expansion): `|` block with k > 1 needs `wishartPrec()` (scale k x k, df > k + 1 as in
+INLA docs); single / `||` blocks need a scalar prior (same prior for each effect).
+LaTeX (`priorLatex()`): one line after the block's distribution line; tau symbol
+`\tau^{(r)}_{k,g}` (`, \quad k = 0, 1` for several effects), SD as `\left(\tau\right)^{-1/2}`:
+`\mathrm{Gamma}(a, b)`, `\mathrm{Exp}(\lambda), \quad P(... > u) = \alpha`,
+`\mathcal{N}^{+}(0, (prec)^{-1})`, `\mathrm{C}^{+}(0, s)`,
+`\mathbf{Q}^{(r)}_{g} \sim \mathcal{W}_{k}(df, pmatrix | s\,\mathbf{I}_k)`; numbers 3 significant
+digits (`numLatex()`, `5 \cdot 10^{-5}`). Blocks without prior: no line.
 
 ### Data summary — `R/summary.R`
 
@@ -177,12 +204,13 @@ math uses `results = "asis"` + `cat(format(..., delim = "$$"))`.
 
 ## Deferred: prior specification
 
-Priors are not designed yet and will be developed in a future step. Until then:
-- current prior-related defaults are placeholders only — don't build on them or tune them:
-  RE blocks get no default `hyper` (INLA default); scaled terms use
+RE-block priors are implemented via `re(..., prior = )` (see Priors). Still open:
+- default priors: RE blocks without `prior` get no `hyper` (INLA default); scaled terms use
   `beta = list(fixed = FALSE, prior = "normal", param = c(0, 0.01))`; zero-eq field
-  `hyper = list()`
+  `hyper = list()` — placeholders, don't build on them or tune them
+- priors for `scaled()`, the gaussian residual (`control.family`) — reuse the constructors
 - the reference output's `wishart2d` default (`param = c(3, 1, 0.004, 0)`) is not implemented
+  (df = 3 is not > k + 1 for k = 2)
 - zero-equation likelihood precision (`control.family`) is not set anywhere yet
 - the pass-through of named `re()` / `scaled()` arguments into `f()` stays as is
 
@@ -193,7 +221,7 @@ Priors are not designed yet and will be developed in a future step. Until then:
 - Dependencies: Imports `stats`, `utils`, `lme4`; Suggests `testthat`, `INLA`
   (`Additional_repositories` set). Avoid `lme4::findbars()` (moved to reformulas, warns); use the
   parsed `re` entries instead.
-- `README.md`: short info, installation (devtools from source + INLA repo), one example whose
+- `README.md`: short info, installation (INLA repo, then `remotes::install_github("LUMC/mvrem", ref = "devel-ai")` or a local clone), one example whose
   printed output is pasted in — re-run it and update the output after API changes.
 - Examples: `CODE_EXAMPLES.Rmd`, rendered to `CODE_EXAMPLES.html` via
   `Rscript -e 'rmarkdown::render("CODE_EXAMPLES.Rmd")'`; update and re-render after API

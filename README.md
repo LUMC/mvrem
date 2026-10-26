@@ -14,10 +14,8 @@ Models are written in familiar lme4-style formulae, extended with:
 - `scaled(x1, ...)` — in an outcome formula, the (scaled) linear predictor of the
   longitudinal submodel `x1`.
 
-In both, the `...` arguments can be used to specify prior distributions and their
-hyperparameters, e.g. `re(1 + t | id, hyper = list(theta1 = list(prior = "wishart2d",
-param = c(4, 1, 0.0011, 0))))` or `scaled(x1, hyper = list(beta = list(prior = "normal",
-param = c(0, 0.01))))`.
+In both, the other named `...` arguments are passed to INLA's `f()`, e.g. `scaled(x1, hyper = list(beta =
+list(prior = "normal", param = c(0, 0.01))))`.
 
 > **Status:** under development. Model specification, data preparation and construction of
 > the INLA formula are implemented; fitting the model (`jsm()`) is not available yet, and the
@@ -25,15 +23,11 @@ param = c(0, 0.01))))`.
 
 ## Installation
 
-Currently the package can only be installed from source with `devtools`:
-
-```r
-# install.packages("devtools")
-devtools::install("path/to/mvrem")
-```
+The package is developed on GitHub: <https://github.com/LUMC/mvrem> (current development
+branch: [`devel-ai`](https://github.com/LUMC/mvrem/tree/devel-ai)).
 
 INLA is not on CRAN; it is used to validate likelihood families and (in the future) to fit
-models. Install it from the INLA repository:
+models. Install it first from the INLA repository:
 
 ```r
 install.packages("INLA",
@@ -42,9 +36,41 @@ install.packages("INLA",
                  dep = TRUE)
 ```
 
+Then install `mvrem` from the `devel-ai` branch:
+
+```r
+# install.packages("remotes")
+remotes::install_github("LUMC/mvrem", ref = "devel-ai")
+```
+
+or from a local clone:
+
+```sh
+git clone -b devel-ai https://github.com/LUMC/mvrem.git
+```
+
+```r
+devtools::install("mvrem")
+```
+
+### Development container (no local INLA installation)
+
+Instead of installing INLA locally, you can use the development container in
+[`.devcontainer/`](.devcontainer/). Its image (based on `rocker/geospatial`, R 4.5) comes
+with INLA, `lme4` and `devtools` already installed:
+
+1. clone the repository (see above) and open it in VS Code with the *Dev Containers*
+   extension;
+2. run **Dev Containers: Reopen in Container**. The image is built on first use, and the
+   repository is mounted at `/home/rstudio/project`. RStudio Server is also available on
+   port 8787;
+3. inside the container, load the package with `devtools::load_all()` or install it with
+   `devtools::install()`.
+
 ## Example
 
-A beta-distributed outcome `y` associated with the trajectory of a longitudinal marker `x1`:
+A beta-distributed outcome `y` associated with the trajectory of a longitudinal marker `x1`,
+with priors on the random effects:
 
 ```r
 library(mvrem)
@@ -61,8 +87,9 @@ d$y  <- plogis(-1 + 0.3 * d$t + 0.8 * (d$x1 - 1) +
 
 # 1. parse the formulae
 forms <- collectFormulas(
-  formOut   = list(y ~ 1 + t + (1 | id) + scaled(x1)),
-  formLong  = list(x1 ~ 1 + t + (1 + t | id)),
+  formOut   = list(y ~ 1 + t + re(1 | id, prior = pcSd(u = 1)) + scaled(x1)),
+  formLong  = list(x1 ~ 1 + t + re(1 + t | id,
+                                  prior = wishartPrec(df = 4, scale = diag(c(1, 0.1))))),
   familyOut = c(y = "beta")
 )
 
@@ -77,7 +104,7 @@ formatInlaFormula(inl, nrows = 2)
 ```r
 MX ~ -1 +
    #
-   # ----- y: y ~ 1 + t + (1 | id) + scaled(x1) -----
+   # ----- y: y ~ 1 + t + re(1 | id, prior = pcSd(u = 1)) + scaled(x1) -----
    #
    #    y_y y_1 y_t   y_1_id   y_FROM_x1_id_t
    #  0.241   1 0.0 y|1|S001   x1|TO|y|S001|0
@@ -85,10 +112,10 @@ MX ~ -1 +
    #
 y_1 +
 y_t +
-f(y_1_id, model = "iid", values = LEVELS$y_1_id, n = length(LEVELS$y_1_id)) +
+f(y_1_id, model = "iid", values = LEVELS$y_1_id, n = length(LEVELS$y_1_id), hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))) +
 f(y_FROM_x1_id_t, copy = "x1_TO_y_id_t", hyper = list(beta = list(fixed = FALSE, prior = "normal", param = c(0, 0.01)))) +
    #
-   # ----- x1: x1 ~ 1 + t + (1 + t | id) -----
+   # ----- x1: x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 4, scale = diag(c(1, 0.1)))) -----
    #
    #  x1_x1 x1_x1_0eq x1_1 x1_t   x1_1_id   x1_t_id x1_WEIGHT     x1_TO_y_id_t
    #  0.766        NA    1  0.0 x1|1|S001 x1|t|S001        NA             <NA>
@@ -98,7 +125,7 @@ f(y_FROM_x1_id_t, copy = "x1_TO_y_id_t", hyper = list(beta = list(fixed = FALSE,
    #
 x1_1 +
 x1_t +
-f(x1_1_id, model = "iid2d", values = LEVELS$x1_1_t_id, n = length(LEVELS$x1_1_t_id)) +
+f(x1_1_id, model = "iid2d", values = LEVELS$x1_1_t_id, n = length(LEVELS$x1_1_t_id), hyper = list(theta1 = list(prior = "wishart2d", param = c(4, 1, 10, 0)))) +
 f(x1_t_id, x1_t, copy = "x1_1_id") +
 f(x1_TO_y_id_t, x1_WEIGHT, model = "iid", values = LEVELS$x1_TO_y_id_t, hyper = list())
 ```
@@ -116,11 +143,35 @@ x_{1,i} &= \beta^{(x_{1})}_{0} + \beta^{(x_{1})}_{1}\, t_{i} + b^{(x_{1})}_{0,\m
 g_{y}\left(\mathrm{E}\left[y_{i}\right]\right) &= \beta^{(y)}_{0} + \beta^{(y)}_{1}\, t_{i} + b^{(y)}_{0,\mathrm{id}[i]} + \gamma_{y,x_{1}}\,u^{(x_{1} \to y)}_{\mathrm{id}[i],t_{i}} \\
 \varepsilon^{(x_{1})}_{i} &\sim \mathcal{N}\left(0, \left(\tau^{(x_{1})}_{\varepsilon}\right)^{-1}\right) \\
 \left(b^{(x_{1})}_{0,l}, b^{(x_{1})}_{1,l}\right)^\top &\sim \mathcal{N}\left(\mathbf{0}, \left(\mathbf{Q}^{(x_{1})}_{\mathrm{id}}\right)^{-1}\right), \quad l = 1, \ldots, n_{\mathrm{id}} \\
+\mathbf{Q}^{(x_{1})}_{\mathrm{id}} &\sim \mathcal{W}_{2}\left(4, \begin{pmatrix}1 & 0 \\ 0 & 0.1\end{pmatrix}\right) \\
 y_{i} &\sim \mathrm{beta} \\
 b^{(y)}_{0,l} &\sim \mathcal{N}\left(0, \left(\tau^{(y)}_{0,\mathrm{id}}\right)^{-1}\right), \quad l = 1, \ldots, n_{\mathrm{id}} \\
+\left(\tau^{(y)}_{0,\mathrm{id}}\right)^{-1/2} &\sim \mathrm{Exp}\left(4.61\right), \quad P\left(\left(\tau^{(y)}_{0,\mathrm{id}}\right)^{-1/2} > 1\right) = 0.01 \\
 u^{(x_{1} \to y)}_{\mathrm{id},t} &\sim \mathcal{N}\left(0, \left(\tau_{x_{1} \to y}\right)^{-1}\right)
 \end{aligned}
 $$
 
 More examples (data lists, missing values, naming schemes, validation errors) are in
 `CODE_EXAMPLES.Rmd` / `CODE_EXAMPLES.html`.
+
+## Priors of random effects
+
+The prior of a random-effect block is given in `re()` with `prior =` and one of these
+functions. Each name says the distribution and the quantity it applies to (precision
+$\tau$, standard deviation $\sigma = \tau^{-1/2}$, or the precision matrix $\mathbf{Q}$):
+
+| Function | Prior | Use for |
+|---|---|---|
+| `gammaPrec(shape = 1, rate = 5e-5)` | $\tau \sim \mathrm{Gamma}(shape, rate)$ | single / `\|\|` effects |
+| `pcSd(u, alpha = 0.01)` | PC prior, $P(\sigma > u) = \alpha$ | single / `\|\|` effects |
+| `halfNormalSd(scale)` | $\sigma \sim \mathcal{N}^{+}(0, scale^2)$ | single / `\|\|` effects |
+| `halfCauchySd(scale)` | $\sigma \sim \mathrm{C}^{+}(0, scale)$ | single / `\|\|` effects |
+| `wishartPrec(df = k + 2, scale = 1)` | $\mathbf{Q} \sim \mathcal{W}_k(df, \mathbf{V})$ | correlated (`\|`) blocks |
+
+```r
+x1 ~ 1 + t + re(1 | id, prior = pcSd(u = 1))                  # P(sigma > 1) = 0.01
+x1 ~ 1 + t + re(1 + t || id, prior = halfNormalSd(scale = 2))  # same prior for both effects
+x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 4, scale = diag(c(1, 0.1))))
+```
+
+Blocks without `prior` (including plain `(1 | id)`) use INLA's default prior.

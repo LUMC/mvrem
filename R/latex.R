@@ -24,6 +24,10 @@
 #' finally those of \eqn{u}. Normal distributions are parametrised by
 #' precision, as in INLA: \eqn{\mathcal{N}(0, \tau^{-1})} and
 #' \eqn{\mathcal{N}(\mathbf{0}, \mathbf{Q}^{-1})}.
+#' A `prior` of a random-effect block (see [priors]) adds a line after the
+#' block's distribution, e.g. \eqn{(\tau)^{-1/2} \sim \mathrm{Exp}(\lambda)} or
+#' \eqn{\mathbf{Q} \sim \mathcal{W}_k(df, \mathbf{V})}; blocks without
+#' `prior` (INLA's default) get none.
 #'
 #' @param x A parsed formula (element of `collectFormulas()$out` / `$long`) or
 #'   the result of [collectFormulas()].
@@ -148,6 +152,11 @@ latexFormula <- function(p, df, obs = "i", longs = NULL) {
                              idx, ",", g, "}\\right)^{-1}\\right), \\quad l = 1, \\ldots, n_{",
                              g, "}"))
     }
+    if (!is.null(df)) checkBlockPrior(blk$prior, length(effects), blk$correlated, blk$term)
+    tauIdx <- if (length(idx) == 1L) idx else "k"
+    dist <- c(dist, priorLatex(blk$prior, length(effects),
+                               tau = paste0("\\tau^{", tag, "}_{", tauIdx, ",", g, "}"),
+                               Q = paste0("\\mathbf{Q}^{", tag, "}_{", g, "}"), idx = idx))
   }
 
   eta <- terms

@@ -65,6 +65,8 @@ corresponding zero-equation field.
 }
 }
 \details{
-Parameters given in \code{re(...)} / \code{scaled(...)} override the defaults
-(nested lists such as \code{hyper} are merged).
+A \code{prior} given in \code{re(...)} (see \link{priors}) sets the \code{hyper} argument of the
+block's term. Other parameters given in \code{re(...)} / \code{scaled(...)} override
+the defaults (nested lists such as \code{hyper} are merged; a warning is given when
+\code{hyper} replaces the distribution set by \code{prior}).
 }
