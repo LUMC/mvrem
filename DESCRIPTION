@@ -1,0 +1,16 @@
+Package: mvrem
+Title: Multivariate Joint Models with INLA
+Version: 0.0.0.9000
+Authors@R: person("S. M.", "Kielbasa", email = "smkielbasa@lumc.nl", role = c("aut", "cre"))
+Description: Provides tools for constructing and fitting Multivariate Joint Models
+    using the Integrated Nested Laplace Approximation (INLA) approach. The package
+    facilitates the specification of complex hierarchical models with multiple
+    longitudinal and outcome processes, handling both fixed and random effects.
+License: GPL (>= 2)
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Imports: stats, utils, lme4
+Suggests: testthat (>= 3.0.0), INLA
+Additional_repositories: https://inla.r-inla-download.org/R/stable
+Config/testthat/edition: 3
+RoxygenNote: 7.3.3

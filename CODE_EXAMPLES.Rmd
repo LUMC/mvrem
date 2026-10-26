@@ -1,0 +1,415 @@
+---
+title: "mvrem code examples"
+output:
+  html_document:
+    self_contained: true
+    math_method: null
+    pandoc_args: ["--katex"]                # keep TeX in <span class="math">
+    includes:
+      in_header: tools/katex/katex-header.html  # vendored KaTeX, embedded (no CDN)
+---
+
+Working examples of the functions implemented so far. All output below was
+produced by running the code (generated with `knitr` from the current package).
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(comment = "#>", error = TRUE)
+devtools::load_all(".", quiet = TRUE)
+```
+
+## Example data
+
+```{r}
+set.seed(1)
+d <- data.frame(
+  id   = rep(1:4, each = 3),
+  site = rep(c("A", "B"), each = 6),
+  t    = rep(0:2, 4),
+  age  = rep(c(50, 61, 47, 70), each = 3),
+  x1 = rnorm(12), x2 = rnorm(12), x3 = rnorm(12),
+  z  = rnorm(12), y = runif(12)
+)
+head(d)
+```
+
+## Step 1: parsing a single formula — `parseJsmFormula()`
+
+### Plain lme4 notation (default priors)
+
+```{r}
+p <- parseJsmFormula(z ~ 1 + t + (1 + t | id), part = "out")
+p$lme4Formula
+p$variables
+str(p$re, give.attr = FALSE)
+```
+
+### `re()` with extra parameters
+
+Extra arguments must be named; they are evaluated in the formula's environment,
+so variables such as `myHyper` are stored by value.
+
+```{r}
+myHyper <- list(prec = list(prior = "pc.prec", param = c(1, 0.01)))
+p <- parseJsmFormula(x1 ~ 1 + t + re(1 + t | id, hyper = myHyper, model = "iidkd"),
+                     part = "long")
+p$lme4Formula
+str(p$re[[1]]$params)
+```
+
+### Several random-effect blocks, correlated (`|`) and uncorrelated (`||`)
+
+```{r}
+p <- parseJsmFormula(x1 ~ 1 + t + re(0 + t | id) + re(1 | id) + (1 + t || site),
+                     part = "long")
+p$lme4Formula
+sapply(p$re, function(b) c(term = deparse1(b$term), group = b$group,
+                           correlated = b$correlated))
+```
+
+### Transformed response and covariates
+
+The response is the variable inside the left-hand side (`y`); the expression
+as written is kept in `lhs`. Variables are extracted from inside function calls.
+
+```{r}
+p <- parseJsmFormula(log(y) ~ t + I(t^2) + poly(age, 2) + re(1 + log(t + 1) | site:id),
+                     part = "long")
+p$response
+p$lhs
+p$lme4Formula
+p$variables
+```
+
+### `scaled()` terms (outcome formulae only)
+
+`scaled()` terms are removed from the lme4 formula; their target and
+parameters are collected separately. Targets are not data variables.
+
+```{r}
+p <- parseJsmFormula(y ~ 1 + t + re(1 + t | id) + scaled(x1, prior = "normal") + scaled(x2),
+                     part = "out")
+p$lme4Formula
+str(p$scaled)
+p$variables
+```
+
+### Removing the intercept
+
+```{r}
+p <- parseJsmFormula(x2 ~ t - 1 + re(1 | id), part = "long")
+p$lme4Formula
+```
+
+## Step 1: the whole model — `collectFormulas()`
+
+```{r}
+forms <- collectFormulas(
+  formOut = list(
+    z ~ 1 + t + (1 + t | id),
+    y ~ 1 + t + re(1 + t | id, hyper = myHyper) + scaled(x1) + scaled(x2, prior = "normal")
+  ),
+  formLong = list(
+    x1 ~ 1 + t + re(0 + t | id) + re(1 | id),
+    x2 ~ 1 + t + re(1 + t | id),
+    x3 ~ 1 + t + re(1 + t || id)
+  ),
+  familyOut = c(y = "beta")
+)
+names(forms$out)
+names(forms$long)
+lapply(c(forms$out, forms$long), `[[`, "lme4Formula")
+forms$variables
+```
+
+### Likelihood families — `familyOut`, `familyLong`
+
+Named character vectors (names = response variables), values = INLA likelihood
+names (`inlaFamilies()`); unlisted responses are `"gaussian"`.
+
+```{r}
+sapply(c(forms$out, forms$long), `[[`, "family")
+fF <- collectFormulas(list(y ~ t + scaled(n), z ~ t), list(n ~ t + (1 | id)),
+                      familyOut = c(y = "beta", z = "binomial"),
+                      familyLong = c(n = "poisson"))
+sapply(c(fF$out, fF$long), `[[`, "family")
+head(inlaFamilies(), 20)
+```
+
+A single formula need not be wrapped in a list:
+
+```{r}
+f1 <- collectFormulas(y ~ t + scaled(x1), x1 ~ t + (1 | id))
+names(f1$long)
+```
+
+## Step 2: preparing data — `prepareData()`
+
+### One data frame for all formulae
+
+Each formula gets a data frame with a character `.key` column (`"K"` + row
+number, or `"K"` + row names if the data frame has them), the variables used by
+the formula and its grouping factors. Keys match across formulae.
+
+```{r}
+dat <- prepareData(dataOut = d, dataLong = d, forms = forms)
+names(dat$out)
+names(dat$long)
+head(dat$long$x1, 3)
+head(dat$out$y, 3)
+identical(dat$out$y$.key, dat$long$x1$.key)
+```
+
+### Data with row names
+
+```{r}
+dn <- d
+rownames(dn) <- sprintf("p%02d", seq_len(nrow(d)))
+dat <- prepareData(dataOut = dn, dataLong = d, forms = forms)
+head(dat$out$y$.key)
+head(dat$long$x1$.key)
+```
+
+### A named list of data frames
+
+Names are the response variables (for `log(y) ~ ...` the name is `y`).
+Separate data frames for the outcome and longitudinal parts may be mixed with
+the single-data-frame form.
+
+```{r}
+dLong <- list(
+  x1 = d[d$t < 2, ],
+  x2 = d,
+  x3 = d[d$id != 4, ]
+)
+dat <- prepareData(dataOut = d, dataLong = dLong, forms = forms)
+sapply(dat$long, nrow)
+dat$long$x3$.key
+```
+
+```{r}
+formsLog <- collectFormulas(list(log(y) ~ t + scaled(x1)), list(x1 ~ t + (1 | id)))
+dat <- prepareData(dataOut = list(y = d[1:6, ]), dataLong = d, forms = formsLog)
+names(dat$out)
+nrow(dat$out$y)
+```
+
+### Grouping factors
+
+Grouping terms are converted to factors with `lme4::glFormula()`; composite
+terms such as `site:id` get their own column.
+
+```{r}
+fg <- collectFormulas(y ~ t + (1 | site:id) + scaled(x1), x1 ~ t + re(1 + t || id))
+dat <- prepareData(d, d, fg)
+str(dat$out$y)
+str(dat$long$x1)
+```
+
+### Missing values — `na.action`
+
+Rows with missing values in a formula's variables are dropped by default
+(`na.action = na.omit`); missing values elsewhere in the data are ignored.
+`na.action = na.fail` stops instead.
+
+```{r}
+dm <- d
+dm$x1[2] <- NA
+dat <- prepareData(dataOut = d, dataLong = dm, forms = forms)
+dat$long$x1$.key
+dat$long$x2$.key
+prepareData(dataOut = d, dataLong = dm, forms = forms, na.action = na.fail)
+```
+
+## Data summary — `summarizeData()`
+
+How much of the supplied data each equation can use: rows supplied, complete
+rows (no missing value in the formula's variables, i.e. kept by `prepareData()`
+with `na.omit`), groups among the complete rows, missing values per variable,
+and the number of zero equations per `scaled()` pair.
+
+```{r}
+dMiss <- d
+dMiss$x1[c(2, 5)] <- NA
+dMiss$t[7] <- NA
+summarizeData(forms, dataOut = d, dataLong = dMiss)
+```
+
+## Step 3: INLA formula — `buildInlaFormula()`
+
+Built from the parsed formulae and the prepared data. Per response:
+
+* **fixed**: one covariate column per design-matrix column (`y_1`, `y_t`);
+* **random**: a single or uncorrelated (`||`) effect gives an `iid` term per
+  effect; correlated effects (`|`) give `iid<k>d` plus `copy` terms. Slopes use
+  the fixed covariate column as weight; indices are labels listed in `LEVELS`;
+* **zero-equation** (longitudinal): `x1_TO_y_id_t` per outcome using `x1`,
+  keyed by the grouping variables and covariates of `x1` at the outcome rows;
+* **scaled** (outcome): `y_FROM_x1_id_t`, a scaled copy of the zero-equation field.
+
+Parameters in `re(...)` / `scaled(...)` override the defaults (nested lists merged).
+
+```{r}
+dS <- data.frame(id = sprintf("S%03d", rep(1:3, each = 4)), t = rep(c(0, 0.5, 1, 1.5), 3),
+                 x1 = rnorm(12), x2 = rnorm(12), y = runif(12))
+formsS <- collectFormulas(
+  formOut = list(
+    y ~ 1 + t +
+      re(1 + t | id, hyper = list(theta1 = list(prior = "wishart2d", param = c(4, 1, 0.0011, 0)))) +
+      scaled(x1, hyper = list(beta = list(initial = 2.2, param = c(0, 0.022)))) +
+      scaled(x2, hyper = list(beta = list(initial = 3.3, param = c(0, 0.033))))
+  ),
+  formLong = list(x1 ~ 1 + t + (1 + t | id), x2 ~ 1 + t + (1 + t | id)),
+  familyOut = c(y = "beta")
+)
+inl <- buildInlaFormula(formsS, prepareData(dS, dS, formsS))
+```
+
+### Annotated formula — `formatInlaFormula()`
+
+One term per line, grouped by response; each group starts with a comment
+showing the user's formula and the first `nrows` rows of the stacked data
+(observation rows, then zero-equation rows). The text parses back to the same
+formula.
+
+```{r, class.output = "r", comment = ""}
+formatInlaFormula(inl, nrows = 4)
+```
+
+```{r, class.output = "r", comment = ""}
+formatInlaFormula(inl, nrows = 0)
+```
+
+The plain formula object:
+
+```{r, class.output = "r", comment = ""}
+inl$formula
+```
+
+```{r}
+inl$responses
+inl$zeroResponses
+inl$families
+inl$fixed$y$columns
+str(inl$random$y[[1]][c("group", "effects", "index", "weight", "levels")])
+str(inl$zero$x1_y[c("long", "out", "vars", "index", "weight")])
+str(inl$levels)
+```
+
+Uncorrelated effects and factor covariates:
+
+```{r, class.output = "r", comment = ""}
+f3 <- collectFormulas(y ~ t + scaled(x3), x3 ~ 1 + I(t^2) + site + re(1 + t || id))
+formatInlaFormula(buildInlaFormula(f3, prepareData(d, d, f3)), nrows = 3)
+```
+
+### Configurable naming scheme
+
+All names come from templates in `namingScheme()`; override any of them per
+call or globally with `options(mvrem.naming = namingScheme(...))`.
+
+```{r}
+str(namingScheme())
+```
+
+```{r, class.output = "r", comment = ""}
+nm <- namingScheme(fixed = "b.{resp}.{term}", intercept = "Int",
+                   zeroWeight = "w.{long}", responseObject = "Y")
+formatInlaFormula(buildInlaFormula(formsS, prepareData(dS, dS, formsS), naming = nm),
+                  nrows = 2)
+```
+
+## LaTeX equations — `latexEquation()`
+
+Takes a formula processed in step 1 (or the whole `collectFormulas()` result)
+and, optionally, the step-2 data to expand factor covariates. Returns the body
+of a LaTeX `aligned` environment; `format(x, delim = "$$")` wraps it for display
+(chunks below use `results = "asis"` so the HTML shows rendered math).
+
+Raw LaTeX of a single longitudinal formula:
+
+```{r}
+latexEquation(forms$long$x1)
+```
+
+Rendered:
+
+```{r, results = "asis"}
+cat(format(latexEquation(forms$long$x1), delim = "$$"))
+```
+
+Families: a gaussian response gets the identity and a residual
+$\varepsilon$; other families a generic link $g$ and a line naming the family.
+Outcome with a transformed response and `scaled()` terms:
+
+```{r, results = "asis"}
+fL <- collectFormulas(log(y) ~ 1 + t + re(1 + t | id) + scaled(x1) + scaled(x2),
+                      list(x1 ~ t + (1 | id), x2 ~ t + (1 | id)),
+                      familyOut = c(y = "gamma"))
+cat(format(latexEquation(fL$out$y), delim = "$$"))
+```
+
+Covariate expressions, uncorrelated effects and a composite grouping factor —
+without data the factor `site` is a single term, with step-2 data it is
+expanded into indicators:
+
+```{r, results = "asis"}
+fx <- collectFormulas(y ~ t + scaled(x3), x3 ~ 1 + I(t^2) + site + age:t + re(1 + t || site:id))
+cat(format(latexEquation(fx$long$x3), delim = "$$"))
+cat(format(latexEquation(fx$long$x3, prepareData(d, d, fx)$long$x3), delim = "$$"))
+```
+
+The whole model (equations first, then random-effect distributions):
+
+```{r, results = "asis"}
+cat(format(latexEquation(forms, prepareData(d, d, forms)), delim = "$$"))
+```
+
+## Validation errors
+
+```{r}
+# scaled() is not allowed in longitudinal formulae
+collectFormulas(list(y ~ t), list(x1 ~ t + scaled(x2)))
+
+# scaled() target must be a longitudinal response
+collectFormulas(list(y ~ t + scaled(x9)), list(x1 ~ t))
+
+# unknown likelihood family
+collectFormulas(y ~ t, x1 ~ t, familyOut = c(y = "betta"))
+
+# family given for a response of the other part
+collectFormulas(y ~ t, x1 ~ t, familyOut = c(x1 = "poisson"))
+
+# old scaled(~ x) syntax
+parseJsmFormula(y ~ t + scaled(~x1))
+
+# first argument of re() must be a bar term
+parseJsmFormula(y ~ t + re(t, hyper = 1))
+
+# extra arguments must be named
+parseJsmFormula(y ~ t + re(1 | id, 0.5))
+
+# re() / scaled() must be top-level terms
+parseJsmFormula(y ~ t + exp(re(1 | id)))
+
+# a response may be defined only once (also via a transformation)
+collectFormulas(list(y ~ t, log(y) ~ t), list(x1 ~ t))
+
+# left-hand side must contain exactly one variable
+parseJsmFormula(cbind(a, b) ~ t)
+
+# data list must cover every response ...
+prepareData(d, list(x1 = d, x2 = d), forms)
+
+# ... and nothing else
+prepareData(d, list(x1 = d, x2 = d, x3 = d, x4 = d), forms)
+
+# data list is keyed by the response variable, not the transformed lhs
+prepareData(list(`log(y)` = d), d, formsLog)
+
+# variables used in a formula must be present in its data
+prepareData(d[, names(d) != "age"], d,
+            collectFormulas(list(y ~ age), list(x1 ~ t)))
+
+# .key is reserved
+prepareData(cbind(d, .key = 0), d, forms)
+```

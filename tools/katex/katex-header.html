@@ -1,0 +1,13 @@
+<link rel="stylesheet" href="tools/katex/katex.min.css">
+<script src="tools/katex/katex.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var els = document.querySelectorAll("span.math");
+  for (var i = 0; i < els.length; i++) {
+    katex.render(els[i].textContent, els[i], {
+      displayMode: els[i].classList.contains("display"),
+      throwOnError: false
+    });
+  }
+});
+</script>

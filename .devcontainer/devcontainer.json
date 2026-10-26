@@ -1,0 +1,30 @@
+{
+  "name": "JSM Multiple Biomarkers with INLA",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "REditorSupport.r",
+        "quarto.quarto",
+        "ms-vscode.live-server"
+      ],
+      "settings": {
+        "r.rterm.linux": "/usr/local/bin/R",
+        "r.bracketedPaste": true
+      }
+    }
+  },
+  "forwardPorts": [8787],
+  "portsAttributes": {
+    "8787": {
+      "label": "RStudio Server",
+      "onAutoForward": "notify"
+    }
+  },
+  "remoteUser": "rstudio",
+  "workspaceMount": "type=bind,src=${localWorkspaceFolder},dest=/home/rstudio/project",
+  "workspaceFolder": "/home/rstudio/project"
+}
