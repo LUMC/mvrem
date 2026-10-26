@@ -155,18 +155,20 @@ More examples (data lists, missing values, naming schemes, validation errors) ar
 `CODE_EXAMPLES.Rmd` / `CODE_EXAMPLES.html`.
 
 ## Priors of random effects
-
-The prior of a random-effect block is given in `re()` with `prior =` and one of these
+The random effects are assumed to follow a Gaussian distribution $mathbf{b}_i \sim N(0, $\methbf{D}$)$, where $\mathbf{D}$ denotes the variance-covariance matrix of the random effects. In the case of a single random effect $k = 1$ (e.g., a random intercept or a random slope only), $\mathbf{D}$ reduces to a scalar variance. 
+The prior of a random-effect variance-covariance matrix $\mathbf{D}$ is given in `re()` with `prior =` and one of these
 functions. Each name says the distribution and the quantity it applies to (precision
 $\tau$, standard deviation $\sigma = \tau^{-1/2}$, or the precision matrix $\mathbf{Q}$):
 
-| Function | Prior | Use for |
+| Function | Prior | Use for | Default parameters
 |---|---|---|
-| `gammaPrec(shape = 1, rate = 5e-5)` | $\tau \sim \mathrm{Gamma}(shape, rate)$ | single / `\|\|` effects |
-| `pcSd(u, alpha = 0.01)` | PC prior, $P(\sigma > u) = \alpha$ | single / `\|\|` effects |
+| `gammaPrec(shape, rate, fixed, initial)` | $\tau \sim \mathrm{Gamma}(shape, rate)$ | single / `\|\|` effects | shape = 1; rate = 5e-5; fixed = FALSE; initial = 4
+| `pcSd(u)` | PC prior, $P(\sigma > u) = \alpha$ | single / `\|\|` effects | alpha = 0.01
 | `halfNormalSd(scale)` | $\sigma \sim \mathcal{N}^{+}(0, scale^2)$ | single / `\|\|` effects |
 | `halfCauchySd(scale)` | $\sigma \sim \mathrm{C}^{+}(0, scale)$ | single / `\|\|` effects |
-| `wishartPrec(df = k + 2, scale = 1)` | $\mathbf{Q} \sim \mathcal{W}_k(df, \mathbf{V})$ | correlated (`\|`) blocks |
+| `wishartPrec(df, scale matrix)` | $\mathbf{Q} \sim \mathcal{W}_k(df, \mathbf{V})$ | correlated (`\|`) blocks | df = k + 2; scale = diag(1, 2)
+
+The option `fixed` determines if a fixed value for the parameter is assumed. If `fixed = TRUE`, then the parameter is fixed to the `initial` value.
 
 ```r
 x1 ~ 1 + t + re(1 | id, prior = pcSd(u = 1))                  # P(sigma > 1) = 0.01
@@ -175,3 +177,7 @@ x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(df = 4, scale = diag(c(1, 0.1)))
 ```
 
 Blocks without `prior` (including plain `(1 | id)`) use INLA's default prior.
+
+## Prior of the scaling parameter
+In INLA formulation, the scaling parameter is also a random effects for which its assumed a Gaussian distribution. By defult $\gamma \sim N(0, 0.0001)$. The code formulation can be `normal(mean, precision, fixed, initial)`.
+
