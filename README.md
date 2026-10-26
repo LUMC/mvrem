@@ -161,7 +161,7 @@ functions. Each name says the distribution and the quantity it applies to (preci
 $\tau$, standard deviation $\sigma = \tau^{-1/2}$, or the precision matrix $\mathbf{Q}$):
 
 | Function | Prior | Use for | Default parameters
-|---|---|---|
+|---|---|---|---|
 | `gammaPrec(shape, rate, fixed, initial)` | $\tau \sim \mathrm{Gamma}(shape, rate)$ | single / `\|\|` effects | shape = 1; rate = 5e-5; fixed = FALSE; initial = 4
 | `pcSd(u)` | PC prior, $P(\sigma > u) = \alpha$ | single / `\|\|` effects | alpha = 0.01
 | `halfNormalSd(scale)` | $\sigma \sim \mathcal{N}^{+}(0, scale^2)$ | single / `\|\|` effects |
