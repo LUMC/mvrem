@@ -9,7 +9,8 @@
       "extensions": [
         "REditorSupport.r",
         "quarto.quarto",
-        "ms-vscode.live-server"
+        "ms-vscode.live-server",
+        "anthropic.claude-code"
       ],
       "settings": {
         "r.rterm.linux": "/usr/local/bin/R",
