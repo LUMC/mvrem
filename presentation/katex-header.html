@@ -1,0 +1,15 @@
+<!-- KaTeX vendored in tools/katex/, embedded by `embed-resources: true` (no CDN, works offline).
+     Renders the raw TeX of pandoc's span.math elements; the class is removed afterwards so
+     that Quarto's own KaTeX loader (which loads ../tools/katex/ at run time) finds nothing. -->
+<link rel="stylesheet" href="../tools/katex/katex.min.css">
+<script src="../tools/katex/katex.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var els = Array.prototype.slice.call(document.querySelectorAll("span.math"));
+  els.forEach(function (el) {
+    var display = el.classList.contains("display");
+    katex.render(el.textContent, el, { displayMode: display, throwOnError: false });
+    el.classList.remove("math");
+  });
+});
+</script>

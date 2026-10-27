@@ -1,0 +1,465 @@
+---
+title: "mvrem"
+subtitle: "Multivariate joint models with INLA — from formulae to the INLA model"
+format:
+  revealjs:
+    embed-resources: true
+    html-math-method:
+      method: katex
+      url: ../tools/katex/             # raw TeX in span.math; rendered by katex-header.html
+    include-in-header: katex-header.html  # embeds the vendored KaTeX (js, css, fonts)
+    include-after-body: slide-ids.html    # [id] of the current slide next to the slide number
+    slide-number: true
+    width: 1280
+    height: 760
+    css: style.css
+execute:
+  echo: true
+  warning: false
+knitr:
+  opts_chunk:
+    comment: ""
+    fig.align: center
+---
+
+```{r setup}
+#| include: false
+devtools::load_all("..", quiet = TRUE)
+library(ggplot2)
+options(width = 110)
+
+# all parts of the stacked INLA data, in the order of the INLA likelihoods,
+# with the columns of the INLA formula (absent columns are NA)
+stackedData <- function(inl, n = Inf) {
+  parts <- list()
+  for (r in names(inl$stacks)) for (p in names(inl$stacks[[r]])) {
+    s <- utils::head(inl$stacks[[r]][[p]], n)
+    s$.block <- if (p == "main") paste0(r, ": observations") else
+      paste0(r, ": zero equations for ", p)
+    parts[[length(parts) + 1]] <- s
+  }
+  cols <- unique(unlist(lapply(parts, names)))
+  out <- do.call(rbind, lapply(parts, function(s) {
+    for (cn in setdiff(cols, names(s))) s[[cn]] <- NA
+    s[cols]
+  }))
+  out$.block <- factor(out$.block, unique(out$.block))
+  rownames(out) <- NULL
+  out
+}
+```
+
+# The idea {#idea}
+
+## Joint scaled models {#jm}
+
+:::: {.columns}
+::: {.column .compact width="52%"}
+- several **longitudinal** markers $x_1, x_2, x_3, \dots$ and one or more
+  **outcomes** $y$, each a mixed model (own fixed and random effects)
+- each outcome depends on the **current value of each marker's linear
+  predictor** $\eta^{(x)}$ through a coefficient $\gamma_{y,x}$
+- fitted jointly with INLA, using the *copy trick*: a latent field $u$
+  equals $\eta^{(x)}$ (a "zero equation") and the outcome uses
+  $\gamma\,u$
+- each equation chooses its **likelihood** (Gaussian, beta, binomial, Poisson, …)
+  and the **prior distributions** of its hyperparameters and random effects
+:::
+::: {.column width="48%"}
+```{mermaid}
+%%| echo: false
+%%| fig-width: 5.5
+%%{init: {"themeVariables": {"fontSize": "13px"}}}%%
+flowchart TB
+  D1[("x1: Gaussian")] --> E1["η(x1) = β + b₀ + b₁t<br/>(correlated)"]
+  D2[("x2: Poisson")] --> E2["log λ = η(x2) = β + b₀ + b₁t<br/>(uncorrelated)"]
+  D3[("x3: binomial")] --> E3["logit p = η(x3) = β + b₀<br/>(intercept only)"]
+  E1 -- "0 = η − u" --> U1["u(x1 → y)"]
+  E2 -- "0 = η − u" --> U2["u(x2 → y)"]
+  E3 -- "0 = η − u" --> U3["u(x3 → y)"]
+  U1 -- "γ₁ · u" --> EY["logit μ = η(y) = β + b₀ + Σₖ γₖ uₖ"]
+  U2 -- "γ₂ · u" --> EY
+  U3 -- "γ₃ · u" --> EY
+  EY --> Y[("y: beta")]
+```
+:::
+::::
+
+
+## Fitting with INLA {#whyinla}
+
+::: {.compact}
+INLA can fit joint scaled models, but:
+
+- is **difficult to run**: it is a separate program accessible (R interface not on CRAN)
+- needs **restructured formulae**: all equations merged into one, variables renamed per equation
+- needs **restructured data**: one stacked data set, response matrix
+- uses **non-intuitive notation**: `f()` with `copy`, weights, `values`
+- has **underdocumented specification** of likelihoods, priors, hyperparameters
+- may need a **containerized environment** to be easily usable (on Macs, on shark)
+- development is easier within a **devcontainer** (easy in VS Code, possible with RStudio)
+
+Moreover, jsm:
+- needs **additional equations**: one zero equation per (marker, outcome) pair
+- needs **careful matching** of random-effect levels
+
+:::
+
+## Can it be simplified? {#simplify .scrollable .tiny}
+
+The model in [jm] as INLA needs it — Gaussian, Poisson and binomial markers with
+correlated, uncorrelated and intercept-only random effects, a beta outcome, priors on
+precisions, SDs and the random-effect matrix (data not shown):
+
+```{r jm-formula}
+#| echo: false
+#| class-output: r
+set.seed(2)
+d3 <- data.frame(id = sprintf("S%03d", rep(1:20, each = 3)), t = rep(c(0, 0.5, 1), 20))
+d3$x1 <- rnorm(nrow(d3))
+d3$x2 <- rpois(nrow(d3), 3)
+d3$n  <- 10
+d3$x3 <- rbinom(nrow(d3), d3$n, 0.4)
+d3$y  <- runif(nrow(d3), 0.1, 0.9)
+f3 <- collectFormulas(
+  formOut  = list(y ~ t + re(1 | id, prior = halfNormalSd(1))),
+  formLong = list(x1 ~ t + re(1 + t | id, prior = wishartPrec()),    # correlated
+                  x2 ~ t + re(1 + t || id, prior = pcSd(1)),         # uncorrelated
+                  x3 | trials(n) ~ t + (1 | id)),                    # intercept only
+  familyOut  = list(y = betaFamily(phi = gammaPrec(1, 0.1))),
+  familyLong = list(x1 = gaussianFamily(prec = pcSd(1)), x2 = poissonFamily(),
+                    x3 = binomialFamily()))
+inl3 <- buildInlaFormula(f3, prepareData(d3, d3, f3))
+# one term per line
+terms3 <- function(e) if (is.call(e) && identical(e[[1]], quote(`+`))) c(terms3(e[[2]]), list(e[[3]])) else list(e)
+rhs <- vapply(terms3(inl3$formula[[3]]), deparse1, "", width.cutoff = 500L)
+grp <- cumsum(startsWith(rhs, "f(") | c(TRUE, startsWith(rhs[-length(rhs)], "f(")))
+rhs <- vapply(split(rhs, grp), paste, "", collapse = " + ")    # fixed effects on one line
+cat("MX ~", paste(rhs, collapse = " +\n     "), "\n")
+cat("\nfamily = ", deparse1(unname(inl3$families)), "\n", sep = "")
+cf <- vapply(unname(inl3$controlFamily), deparse1, "", width.cutoff = 500L)
+cat("\ncontrol.family = list(\n  ", paste(cf, collapse = ",\n  "), ")\n", sep = "")
+```
+
+## Our proposal: `jsm()` {#proposal}
+
+The same model, written as mixed-model formulae:
+
+```{r jsm-call}
+#| eval: false
+fit <- jsm(
+  formOut  = list(y ~ t + re(1 | id, prior = halfNormalSd(1))),
+  formLong = list(x1 ~ t + re(1 + t | id, prior = wishartPrec()),  # correlated
+                  x2 ~ t + re(1 + t || id, prior = pcSd(1)),       # uncorrelated
+                  x3 | trials(n) ~ t + (1 | id)),                  # intercept only
+  familyOut  = list(y = betaFamily(phi = gammaPrec(1, 0.1))),
+  familyLong = list(x1 = gaussianFamily(prec = pcSd(1)),
+                    x2 = poissonFamily(), x3 = binomialFamily()),
+  dataOut = d, dataLong = d
+)
+```
+
+::: {.small}
+- lme4 notation, brms-style `trials()`; families and priors as functions
+- every outcome is linked to every marker automatically; `scaled(x1, ...)` only for non-default
+  settings
+- INLA formula, stacked data, renaming, zero equations and level matching are generated
+- `jsm()` is the target wrapper — today the same steps run as
+  `collectFormulas()` → `prepareData()` → `buildInlaFormula()`
+:::
+
+## The pipeline {#pipeline}
+
+| Step | Function | Result |
+|---|---|---|
+| 1 | `collectFormulas()` | parsed formulae, variables, families, associations |
+| 2 | `prepareData()` | one data frame per equation (rows, grouping factors, checks) |
+| 3 | `buildInlaFormula()` | INLA formula, stacked data, `family`, `control.family` |
+| — | `formatInlaFormula()` | annotated formula with its data |
+| — | `latexEquation()` | model equations as LaTeX |
+| — | `summarizeData()` | rows used / dropped, groups, zero equations |
+
+Planned: a `jsm()` wrapper that runs all steps and calls INLA.
+
+# A simple model {#simple}
+
+## Simulated data {#sim}
+
+200 subjects, 4 visits; marker `x1` with random intercept and slope, beta
+outcome `y` driven by the marker's linear predictor.
+
+```{r data}
+set.seed(1)
+n <- 200
+d <- data.frame(id = sprintf("S%03d", rep(seq_len(n), each = 4)),
+                t  = rep(c(0, 0.5, 1, 1.5), n))
+i <- as.integer(factor(d$id))
+eta <- 1 + 0.5 * d$t + rnorm(n, sd = 0.5)[i] + rnorm(n, sd = 0.2)[i] * d$t
+d$x1 <- eta + rnorm(nrow(d), sd = 0.2)                      # marker
+mu <- plogis(-1 + 0.8 * eta)                                # gamma = 0.8
+d$y <- rbeta(nrow(d), 20 * mu, 20 * (1 - mu))               # outcome, phi = 20
+head(d, 4)
+```
+
+## Data at a glance {#glance}
+
+```{r data-plot}
+#| echo: false
+#| fig-width: 11
+#| fig-height: 4.2
+sub <- d[d$id %in% unique(d$id)[1:40], ]                    # 40 of the 200 subjects
+long <- rbind(data.frame(sub[c("id", "t")], value = sub$x1, process = "marker x1"),
+              data.frame(sub[c("id", "t")], value = sub$y, process = "outcome y"))
+ggplot(long, aes(t, value, group = id)) +
+  geom_line(alpha = 0.35, colour = "#3b6ea5") + geom_point(size = 0.8, colour = "#3b6ea5") +
+  facet_wrap(~ process, scales = "free_y") +
+  theme_minimal(base_size = 15) + labs(x = "time t", y = NULL)
+```
+
+## Step 1 — the model in formulae {#step1}
+
+```{r forms}
+forms <- collectFormulas(
+  formOut  = list(y ~ t),                     # outcome: linked to x1 automatically
+  formLong = list(x1 ~ t + (1 + t | id)),     # marker: correlated random intercept + slope
+  familyOut = list(y = betaFamily())          # x1: gaussian (default)
+)
+forms$variables
+vapply(forms$out$y$scaled, `[[`, "", "target")    # associations of y
+```
+
+::: {.small}
+Every outcome is associated with every longitudinal response; `scaled(x1, ...)`
+in the outcome formula is only needed for non-default parameters of that link.
+:::
+
+## Step 2 — data per equation {#step2}
+
+```{r prepare}
+dat <- prepareData(dataOut = d, dataLong = d, forms = forms)
+head(dat$long$x1, 3)
+head(dat$out$y, 3)
+```
+
+::: {.small}
+Variables selected, incomplete rows dropped (`na.action`), grouping factors built,
+row keys `.key`, responses checked against the family (beta: $0 < y < 1$).
+:::
+
+# INLA translation {#transl}
+
+## Step 3 — the INLA formula {#step3 .scrollable}
+
+```{r inla}
+inl <- buildInlaFormula(forms, dat)
+formatInlaFormula(inl, nrows = 0)
+```
+
+## What the names mean {#names}
+
+| Term | Meaning |
+|---|---|
+| `MX` | response matrix: one column per likelihood (`y_y`, `x1_x1`, `x1_x1_0eq`) |
+| `y_1`, `y_t`, `x1_1`, `x1_t` | fixed effects (covariate columns, intercept = `1`) |
+| `x1_1_id` + `copy` `x1_t_id` | correlated random intercept + slope (`iid2d`), slope weighted by `x1_t` |
+| `x1_TO_y_id_t` | field $u$ of the zero equation $0 = \eta^{(x_1)} - u$, one value per `(id, t)` |
+| `x1_WEIGHT` | $-1$ in zero-equation rows |
+| `y_FROM_x1_id_t` | scaled copy $\gamma\,u$ in the outcome |
+
+All names come from a configurable `namingScheme()`.
+
+```{r families}
+inl$families
+```
+
+# INLA data structure {#struct}
+
+## The stacked data {#stack}
+
+```{r stack-plot}
+#| echo: false
+#| fig-width: 12.5
+#| fig-height: 5.6
+st <- stackedData(inl, n = 5)
+role <- function(cn) {
+  if (cn %in% names(inl$families)) "response matrix MX"
+  else if (cn %in% unlist(lapply(inl$fixed, function(f) names(f$columns)))) "fixed effects"
+  else if (grepl("TO|FROM|WEIGHT", cn)) "association"
+  else "random effects"
+}
+cols <- setdiff(names(st), ".block")
+tiles <- do.call(rbind, lapply(cols, function(cn) data.frame(
+  row = seq_len(nrow(st)), block = st$.block, column = cn, role = role(cn),
+  value = vapply(st[[cn]], function(v) if (is.na(v)) "" else if (is.numeric(v))
+    format(signif(v, 2)) else sub("^[^|]*\\|", "", v), ""),
+  present = !is.na(st[[cn]]))))
+tiles$column <- factor(tiles$column, cols)
+tiles$role <- factor(tiles$role, c("response matrix MX", "fixed effects", "random effects",
+                                   "association"))
+ggplot(tiles, aes(column, row)) +
+  geom_tile(aes(fill = ifelse(present, as.character(block), NA)), colour = "white",
+            linewidth = 0.6) +
+  geom_text(aes(label = value), size = 2.9) +
+  facet_grid(~ role, scales = "free_x", space = "free_x") +
+  scale_y_reverse(breaks = NULL) +
+  scale_fill_manual(values = c("#f2c14e", "#7fb3d5", "#a9d18e"), na.value = "grey94",
+                    breaks = levels(st$.block), name = NULL) +
+  labs(x = NULL, y = NULL, caption = "first 5 rows of each part; labels without response prefix; empty = NA") +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1, family = "mono"),
+        legend.position = "top", panel.grid = element_blank())
+```
+
+::: {.small}
+One row per observation **and** one per zero equation. Each block fills only
+its own response column of `MX` — that is how INLA assigns the likelihoods.
+:::
+
+## Matching outcome and marker {#match .scrollable}
+
+```{r zero-rows}
+zr <- inl$stacks$x1$y
+nrow(zr)                                       # unique (id, t) in the outcome data
+head(zr[c("x1_x1_0eq", "x1_1", "x1_t", "x1_1_id", "x1_t_id", "x1_WEIGHT", "x1_TO_y_id_t")], 3)
+head(inl$stacks$y$main[c("y_y", "y_FROM_x1_id_t")], 3)
+```
+
+::: {.small}
+Zero-equation rows evaluate $\eta^{(x_1)}$ at the **outcome's** `(id, t)` values;
+the outcome row points to the same label (`x1|TO|y|S001|0`) via the copy. Rows
+are matched by values, not by row number — outcome visits without a marker
+measurement still get a zero equation.
+:::
+
+# LaTeX formulae {#tex}
+
+## The model as equations {#eqs .scrollable}
+
+```{r latex}
+#| output: asis
+cat(format(latexEquation(forms, dat), delim = "$$"))
+```
+
+::: {.small}
+`latexEquation(forms, dat)` — generated from the parsed model; normals in the
+precision parametrisation, as in INLA.
+:::
+
+# Beyond the simple model {#beyond}
+
+## Families, inputs and priors {#rich-spec .scrollable}
+
+```{r rich}
+d$n <- 10; d$k <- rbinom(nrow(d), d$n, plogis(-0.5 + 0.6 * eta))      # successes of n trials
+fR <- collectFormulas(
+  formOut  = list(y ~ t + scaled(x1, hyper = list(beta = list(param = c(0, 1)))),
+                  k | trials(n) ~ t + re(1 | id, prior = pcSd(u = 1))),
+  formLong = list(x1 ~ t + re(1 + t | id, prior = wishartPrec(df = 4, scale = diag(c(1, 0.1))))),
+  familyOut  = list(y = betaFamily(phi = gammaPrec(1, 0.1)),
+                    k = binomialFamily(link = "probit")),
+  familyLong = list(x1 = gaussianFamily(prec = pcSd(u = 1))))
+inlR <- buildInlaFormula(fR, prepareData(d, d, fR))
+str(inlR$controlFamily[c("y_y", "k_k")])
+```
+
+## … and their equations {#rich-eqs .scrollable}
+
+```{r rich-latex}
+#| output: asis
+#| echo: false
+cat(format(latexEquation(fR, prepareData(d, d, fR)), delim = "$$"))
+```
+
+## Supported families {#fams}
+
+| Constructor | INLA | Hyperparameters | LHS input |
+|---|---|---|---|
+| `gaussianFamily()`, `studentTFamily()`, `lognormalFamily()` | `gaussian`, `t`, `lognormal` | `prec` (`dof`) | |
+| `gammaFamily()`, `betaFamily()` | `gamma`, `beta` | `prec`, `phi` | |
+| `poissonFamily()`, `negBinomialFamily()` | `poisson`, `nbinomial` | (`size`) | `exposure()` |
+| `binomialFamily()`, `betaBinomialFamily()` | `binomial`, `betabinomial` | (`rho`) | `trials()` |
+| `zeroInflatedPoissonFamily()`, `zeroInflatedNegBinomialFamily()` | `zeroinflated…0/1` | `prob` (`size`) | `exposure()` |
+| `inlaFamily()` | any non-survival | any | both |
+
+Priors: `gammaPrec()`, `pcSd()`, `halfNormalSd()`, `halfCauchySd()`,
+`wishartPrec()` — or raw INLA `hyper` entries.
+
+# Fitting (preview) {#fitting}
+
+## Hand-assembled INLA call {#fit-call}
+
+```{r fit}
+#| echo: false
+fitInla <- function(inl) {
+  st <- stackedData(inl)
+  resp <- names(inl$families)
+  data <- c(as.list(st[setdiff(names(st), c(resp, ".block"))]), list(MX = as.matrix(st[resp])))
+  INLA::inla(inl$formula, family = unname(inl$families), data = data,
+             control.family = unname(inl$controlFamily))
+}
+fit <- suppressMessages(fitInla(inl))
+est <- rbind(fit$summary.fixed[, c("mean", "sd")],
+             fit$summary.hyperpar[c("Precision for the Gaussian observations[2]",
+                                    "precision parameter for the beta observations",
+                                    "Beta for y_FROM_x1_id_t"), c("mean", "sd")])
+rownames(est) <- c("y: intercept", "y: t", "x1: intercept", "x1: t",
+                   "x1: residual precision", "y: beta precision phi", "gamma (x1 -> y)")
+est$true <- c(-1, 0, 1, 0.5, 25, 20, 0.8)
+knitr::kable(round(est[c("true", "mean", "sd")], 2))
+```
+
+::: {.small}
+`inla(inl$formula, family = inl$families, control.family = inl$controlFamily, data = <stacked data>)`
+recovers the simulated values (200 subjects). The `jsm()` wrapper will do this assembly.
+:::
+
+# Status {#status}
+
+## Where we are {#where}
+
+- **done**: formula parsing, data preparation, INLA formula and stacked data,
+  families with `control.family`, `trials()` / `exposure()`, priors for random
+  effects and family hyperparameters, LaTeX, data summary
+- **next**: `jsm()` wrapper and fitting, priors in `scaled()`, survival outcomes
+  (`inla.surv`)
+- **placeholders** (to be decided): default prior of the scaling coefficient, fixed
+  precisions of the zero equations
+
+# Extras {#extras}
+
+## Development container {#devcont}
+
+:::: {.columns}
+::: {.column width="55%"}
+`.devcontainer/` — a ready-to-use environment, no local INLA installation:
+
+- image based on `rocker/geospatial` (R 4.5) with **INLA**, `lme4`, `devtools`,
+  Quarto
+- VS Code: *Dev Containers: Reopen in Container*; the repository is mounted at
+  `/home/rstudio/project`
+- VS Code extensions: R, Quarto, Live Server, Claude Code
+- **RStudio Server** on port 8787
+:::
+::: {.column width="45%"}
+```sh
+git clone -b devel-ai \
+  https://github.com/LUMC/mvrem.git
+code mvrem   # -> Reopen in Container
+```
+
+```r
+devtools::load_all()
+devtools::test()
+```
+:::
+::::
+
+## More material {#more}
+
+- `README.md` — installation and an end-to-end example
+- `CODE_EXAMPLES.Rmd` / `.html` — all functions with their output, including
+  validation errors
+- `summarizeData()` — rows used per equation, missing values, zero equations
+- `namingScheme()` — rename every column / field of the INLA model
+- `presentation/mvrem-demo.qmd` — this presentation
+  (`quarto render presentation/mvrem-demo.qmd`)

@@ -1,0 +1,21 @@
+<!-- Shows the id of the current slide ({#id} on its heading; "title" for the title slide)
+     as [id] in the bottom right corner, next to the slide number. The id is also the
+     slide's URL anchor (mvrem-demo.html#/id). -->
+<script>
+window.addEventListener("load", function () {
+  var tag = document.createElement("div");
+  tag.className = "slide-id";
+  document.querySelector(".reveal").appendChild(tag);
+  function update() {
+    var s = Reveal.getCurrentSlide();
+    var id = s && s.id === "title-slide" ? "title" : (s && s.id) || "";
+    tag.textContent = id ? "[" + id + "]" : "";
+    var num = document.querySelector(".reveal .slide-number");
+    var w = num && num.offsetParent ? num.offsetWidth : 0;
+    tag.style.right = (w + 14) + "px";
+  }
+  Reveal.on("slidechanged", function () { setTimeout(update, 0); });
+  Reveal.on("ready", update);
+  update();
+});
+</script>

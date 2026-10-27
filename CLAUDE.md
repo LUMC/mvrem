@@ -323,3 +323,14 @@ Still open:
   with woff2-only fonts, `katex-header.html` render script; MIT `LICENSE`), included with
   `pandoc_args: --katex` + `includes: in_header`. Don't switch back to `math_method:
   katex/mathjax` — rmarkdown marks those as external (CDN), giving tofu glyphs offline.
+- Presentation: `presentation/mvrem-demo.qmd` (Quarto reveal.js; simple model -> INLA formula
+  -> stacked-data tile plot -> LaTeX -> families/priors -> hand-assembled fit (200 subjects;
+  with 40, gamma is noticeably attenuated for some seeds) -> status -> Extras incl. the dev
+  container). Render with `quarto render presentation/mvrem-demo.qmd`; fully self-contained
+  HTML (`embed-resources: true`). Math: `html-math-method: katex` only makes pandoc emit raw
+  TeX in `span.math` (`plain` converts TeX to HTML — math is lost); Quarto's own KaTeX loader
+  loads js/css from the `url` at run time (not embedded), so `presentation/katex-header.html`
+  embeds the vendored KaTeX (js, css, woff2 fonts) and renders the spans itself, removing the
+  `math` class so Quarto's loader finds nothing. Every slide heading has a short explicit
+  id (`{#step3}`, used to refer to slides; new slides need one); `slide-ids.html` shows it as
+  `[id]` left of the slide number (title slide: `[title]`). Re-render after API changes.

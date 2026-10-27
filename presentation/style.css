@@ -1,0 +1,39 @@
+.reveal pre code {
+  font-size: 0.62em;
+  line-height: 1.25;
+  max-height: 520px;
+}
+.reveal .small {
+  font-size: 0.62em;
+  color: #555;
+}
+.reveal table {
+  font-size: 0.6em;
+}
+.reveal .katex-display {
+  font-size: 0.72em;
+  margin: 0.2em 0;
+}
+.reveal .katex {
+  font-size: 1em;
+}
+.reveal .slide-id {
+  position: absolute;
+  bottom: 8px;
+  right: 60px;
+  z-index: 31;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px;
+  color: #777;
+}
+.reveal .compact {
+  font-size: 0.8em;
+}
+.reveal .tiny pre code {
+  font-size: 0.5em;
+}
+.reveal .tiny p {
+  font-size: 0.75em;
+}
