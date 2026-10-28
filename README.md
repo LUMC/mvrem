@@ -23,6 +23,15 @@ list(prior = "normal", param = c(0, 0.01))))`.
 > the INLA formula are implemented; fitting the model (`jsm()`) is not available yet, and the
 > default priors are not finalised.
 
+## Authors
+
+Szymon M. Kiełbasa, Chiara Degan (authors), Roula Tsonaka, Bart Mertens
+(contributors); Leiden University Medical Center.
+
+Much of the code, tests and documentation was developed with Claude, Anthropic's AI
+assistant (Claude Code), under the direction of the authors; commits with its
+contributions carry a `Co-Authored-By: Claude` line.
+
 ## Installation
 
 The package is developed on GitHub: <https://github.com/LUMC/mvrem> (current development

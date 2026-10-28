@@ -37,3 +37,11 @@
 .reveal .tiny p {
   font-size: 0.75em;
 }
+/* note below the authors on the title slide (the reveal.js title slide has no free-text field) */
+.reveal #title-slide::after {
+  content: "Developed with Claude, Anthropic's AI assistant (Claude Code)";
+  display: block;
+  margin-top: 1.2em;
+  font-size: 0.5em;
+  color: #777;
+}

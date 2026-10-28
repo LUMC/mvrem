@@ -1,6 +1,9 @@
 ---
-title: "mvrem"
+title: "R package: mvrem"
 subtitle: "Multivariate joint models with INLA — from formulae to the INLA model"
+author:   # one entry, so that the shared affiliation is shown once
+  - name: "Szymon M. Kiełbasa, Chiara Degan, Roula Tsonaka, Bart Mertens"
+    affiliation: "Department of Biomedical Data Sciences, Section Medical Statistics, Leiden University Medical Center"
 format:
   revealjs:
     embed-resources: true
@@ -100,6 +103,7 @@ INLA can fit joint scaled models, but:
 - development is easier within a **devcontainer** (easy in VS Code, possible with RStudio)
 
 Moreover, jsm:
+
 - needs **additional equations**: one zero equation per (marker, outcome) pair
 - needs **careful matching** of random-effect levels
 
@@ -164,20 +168,143 @@ fit <- jsm(
 - every outcome is linked to every marker automatically; `scaled(x1, ...)` only for non-default
   settings
 - INLA formula, stacked data, renaming, zero equations and level matching are generated
-- `jsm()` is the target wrapper — today the same steps run as
-  `collectFormulas()` → `prepareData()` → `buildInlaFormula()`
+:::
+
+## `collectFormulas()`: responses and effects {#cf-terms .smaller}
+
+:::: {.columns}
+::: {.column width="50%"}
+| Specification | Meaning |
+|---|---|
+| `y ~ t + grp` | fixed effects (factors expand) |
+| `log(y) ~ ...` | transformed response, named `y` |
+| `k | trials(n) ~ ...` | binomial: successes of `n` trials |
+| `cnt | exposure(pt) ~ ...` | counts with exposure |
+| `(1 + t | id)` | correlated intercept + slope |
+| `(1 + t || id)` | uncorrelated intercept, slope |
+| `(1 | id)`, `(0 + t | id)` | intercept / slope only |
+| `re(1 | id) + re(0 + t | id)` | two independent blocks |
+| `(1 | site:id)` | nested grouping |
+| `re(1 | id, prior = pcSd(u = 1))` | block with its prior (next slide) |
+| `scaled(x1, ...)` | settings of the link to `x1` (outcomes) |
+:::
+::: {.column width="50%"}
+```{r cf-terms}
+p <- parseJsmFormula(
+  log(x1) ~ t + grp +
+    re(1 + t | id, prior = wishartPrec(df = 4)) +
+    re(1 | site:id, prior = pcSd(u = 1)) +
+    (0 + t || clinic),
+  part = "long")
+unlist(p$variables[c("response", "covariate")])
+data.frame(
+  term = vapply(p$re, function(b)
+    deparse1(b$term), ""),
+  group = vapply(p$re, `[[`, "", "group"),
+  correlated = vapply(p$re, `[[`, NA,
+                      "correlated"),
+  prior = vapply(p$re, function(b)
+    if (is.null(b$prior)) "-" else b$prior$dist, ""))
+```
+:::
+::::
+
+::: {.small}
+Checked early: one response variable per formula, no duplicates, `scaled()` only in outcomes
+and only for known markers, family inputs (`trials()` / `exposure()`) matching the family.
+:::
+
+## `collectFormulas()`: priors and hyperparameters {#cf-priors .smaller .scrollable}
+
+| Constructor (defaults) | Prior on | Distribution | Parametrisation |
+|---|---|---|---|
+| `gammaPrec(shape = 1, rate = 5e-5)` | precision $\tau$ | [Gamma](https://en.wikipedia.org/wiki/Gamma_distribution) | shape $\alpha$, **rate** $\beta$; $E\tau = \alpha/\beta$ |
+| `pcSd(u, alpha = 0.01)` | SD $\sigma$ | [Exponential](https://en.wikipedia.org/wiki/Exponential_distribution) ([PC prior](https://doi.org/10.1214/16-STS576)) | rate $\lambda = -\log(\alpha)/u$, i.e. $P(\sigma > u) = \alpha$ |
+| `halfNormalSd(scale)` | SD $\sigma$ | [Half-normal](https://en.wikipedia.org/wiki/Half-normal_distribution) | Wikipedia's $\sigma$ = `scale` (SD of the unfolded normal) |
+| `halfCauchySd(scale)` | SD $\sigma$ | [Cauchy](https://en.wikipedia.org/wiki/Cauchy_distribution), folded at 0 | location 0, scale $\gamma$ = `scale` |
+| `wishartPrec(df = k + 2, scale = 1)` | precision matrix $\mathbf{Q}$ | [Wishart](https://en.wikipedia.org/wiki/Wishart_distribution) | $W_k(\mathbf{V}, n)$: $n$ = `df`, $\mathbf{V}$ = `scale` ($s\,\mathbf{I}$ if scalar); $E\mathbf{Q} = n\mathbf{V}$ |
+
+| Where | Hyperparameter arguments |
+|---|---|
+| random-effect block | `re(1 + t | id, prior = wishartPrec(df = 4))` (`|`, k > 1); `re(1 | id, prior = pcSd(u = 1))` (single / `||`: each effect) |
+| Gaussian-type | `gaussianFamily(prec, link)`, `lognormalFamily(prec)`, `studentTFamily(prec, dof)`, `gammaFamily(prec, link)` |
+| other families | `betaFamily(phi, link)`, `negBinomialFamily(size, link)`, `betaBinomialFamily(rho, link)`, `zeroInflatedPoissonFamily(type, prob)` |
+| association $\gamma$ | `scaled(x1, hyper = list(beta = list(param = c(0, 1))))`: [Normal](https://en.wikipedia.org/wiki/Normal_distribution)(mean, **precision**) |
+
+::: {.small}
+`prec` / `phi` take the four scalar priors, `size` only `gammaPrec()`; any hyperparameter also
+accepts a raw INLA list (`prec = list(initial = 4, fixed = TRUE)`). Priors are validated when
+created and translated to INLA's `hyper` / `control.family`; no prior given → INLA default.
+:::
+
+## The stacked data {#stack}
+
+```{r stack-plot}
+#| echo: false
+#| fig-width: 12.5
+#| fig-height: 5.6
+# the simple model of the later slides (chunks data, forms, prepare, inla), built quietly
+env <- new.env()
+for (lbl in c("data", "forms", "prepare", "inla"))
+  eval(parse(text = knitr::knit_code$get(lbl)), envir = env)
+st <- stackedData(env$inl, n = 5)
+# column of MX for which a row predicts (needed when the response is NA)
+st$predict <- ifelse(grepl("zero equations", st$.block),
+                     paste0(sub(":.*", "", st$.block), "_0eq"), sub(":.*", "", st$.block))
+st <- st[c("predict", setdiff(names(st), "predict"))]
+# a missing response in one y and one x1 observation (kept in the stack, predicted)
+miss <- c(which(st$.block == "y: observations")[2], which(st$.block == "x1: observations")[3])
+missCol <- c("y_y", "x1_x1")
+for (k in 1:2) st[miss[k], missCol[k]] <- NA
+role <- function(cn) {
+  if (cn == "predict") "predict"
+  else if (cn %in% names(env$inl$families)) "response matrix MX"
+  else if (cn %in% unlist(lapply(env$inl$fixed, function(f) names(f$columns)))) "fixed effects"
+  else if (grepl("TO|FROM|WEIGHT", cn)) "association"
+  else "random effects"
+}
+cols <- setdiff(names(st), ".block")
+tiles <- do.call(rbind, lapply(cols, function(cn) data.frame(
+  row = seq_len(nrow(st)), block = st$.block, column = cn, role = role(cn),
+  value = vapply(st[[cn]], function(v) if (is.na(v)) "" else if (is.numeric(v))
+    format(signif(v, 2)) else sub("^[^|]*\\|", "", v), ""),
+  present = !is.na(st[[cn]]) | (cn %in% missCol & seq_len(nrow(st)) %in% miss[cn == missCol]))))
+isMiss <- !is.na(tiles$value) & tiles$value == "" & tiles$present
+tiles$value[isMiss] <- "NA"
+tiles$column <- factor(tiles$column, cols)
+tiles$role <- factor(tiles$role, c("predict", "response matrix MX", "fixed effects", "random effects",
+                                   "association"))
+ggplot(tiles, aes(column, row)) +
+  geom_tile(aes(fill = ifelse(present, as.character(block), NA)), colour = "white",
+            linewidth = 0.6) +
+  geom_text(aes(label = value, colour = value == "NA", fontface = ifelse(value == "NA", "bold", "plain")),
+            size = 2.9, show.legend = FALSE) +
+  scale_colour_manual(values = c("FALSE" = "black", "TRUE" = "#c0392b")) +
+  facet_grid(~ role, scales = "free_x", space = "free_x") +
+  scale_y_reverse(breaks = NULL) +
+  scale_fill_manual(values = c("#f2c14e", "#7fb3d5", "#a9d18e"), na.value = "grey94",
+                    breaks = levels(st$.block), name = NULL) +
+  labs(x = NULL, y = NULL, caption = "first 5 rows of each part; labels without response prefix; empty = NA (not part of the equation); NA = missing response, predicted") +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1, family = "mono"),
+        legend.position = "top", panel.grid = element_blank())
+```
+
+::: {.small}
+One row per observation **and** one per zero equation. Each block fills only
+its own response column of `MX` — that is how INLA assigns the likelihoods.
 :::
 
 ## The pipeline {#pipeline}
 
-| Step | Function | Result |
-|---|---|---|
-| 1 | `collectFormulas()` | parsed formulae, variables, families, associations |
-| 2 | `prepareData()` | one data frame per equation (rows, grouping factors, checks) |
-| 3 | `buildInlaFormula()` | INLA formula, stacked data, `family`, `control.family` |
-| — | `formatInlaFormula()` | annotated formula with its data |
-| — | `latexEquation()` | model equations as LaTeX |
-| — | `summarizeData()` | rows used / dropped, groups, zero equations |
+| Function | Result |
+|---|---|
+| `collectFormulas()` | parsed formulae, variables, families, associations |
+| `prepareData()` | one data frame per equation (rows, grouping factors, checks) |
+| `buildInlaFormula()` | INLA formula, stacked data, `family`, `control.family` |
+| `formatInlaFormula()` | annotated formula with its data |
+| `latexEquation()` | model equations as LaTeX |
+| `summarizeData()` | rows used / dropped, groups, zero equations |
 
 Planned: a `jsm()` wrapper that runs all steps and calls INLA.
 
@@ -273,47 +400,6 @@ inl$families
 ```
 
 # INLA data structure {#struct}
-
-## The stacked data {#stack}
-
-```{r stack-plot}
-#| echo: false
-#| fig-width: 12.5
-#| fig-height: 5.6
-st <- stackedData(inl, n = 5)
-role <- function(cn) {
-  if (cn %in% names(inl$families)) "response matrix MX"
-  else if (cn %in% unlist(lapply(inl$fixed, function(f) names(f$columns)))) "fixed effects"
-  else if (grepl("TO|FROM|WEIGHT", cn)) "association"
-  else "random effects"
-}
-cols <- setdiff(names(st), ".block")
-tiles <- do.call(rbind, lapply(cols, function(cn) data.frame(
-  row = seq_len(nrow(st)), block = st$.block, column = cn, role = role(cn),
-  value = vapply(st[[cn]], function(v) if (is.na(v)) "" else if (is.numeric(v))
-    format(signif(v, 2)) else sub("^[^|]*\\|", "", v), ""),
-  present = !is.na(st[[cn]]))))
-tiles$column <- factor(tiles$column, cols)
-tiles$role <- factor(tiles$role, c("response matrix MX", "fixed effects", "random effects",
-                                   "association"))
-ggplot(tiles, aes(column, row)) +
-  geom_tile(aes(fill = ifelse(present, as.character(block), NA)), colour = "white",
-            linewidth = 0.6) +
-  geom_text(aes(label = value), size = 2.9) +
-  facet_grid(~ role, scales = "free_x", space = "free_x") +
-  scale_y_reverse(breaks = NULL) +
-  scale_fill_manual(values = c("#f2c14e", "#7fb3d5", "#a9d18e"), na.value = "grey94",
-                    breaks = levels(st$.block), name = NULL) +
-  labs(x = NULL, y = NULL, caption = "first 5 rows of each part; labels without response prefix; empty = NA") +
-  theme_minimal(base_size = 14) +
-  theme(axis.text.x = element_text(angle = 35, hjust = 1, family = "mono"),
-        legend.position = "top", panel.grid = element_blank())
-```
-
-::: {.small}
-One row per observation **and** one per zero equation. Each block fills only
-its own response column of `MX` — that is how INLA assigns the likelihoods.
-:::
 
 ## Matching outcome and marker {#match .scrollable}
 
@@ -453,6 +539,22 @@ devtools::test()
 ```
 :::
 ::::
+
+## Non-AI vs AI development {#nonai-vs-ai .smaller}
+
+- 1st implementation (human-written, GitHub Copilot):
+  - INLA formula and data were generated
+  - no lme4 input (lack of proper specification)
+- 2nd implementation (human-written, GitHub Copilot):
+  - working, limited support for complex model specifications and priors
+- 3rd implementation (Claude Code written):
+  - **no single line of R code** written manually
+  - problem approached in small steps with prior (?deep?) understanding
+  - auto-generated code, documentation, **tests**
+  - iterative refinement based on **auto-testing** and human feedback
+  - no hallucinations observed (all code and documentation are grounded in the task)
+  - broader support for complex model specifications, priors, latex
+  - some deeper coding mistakes (which I made in the 2nd implementation and I did not properly describe), were also made by Claude Code
 
 ## More material {#more}
 
