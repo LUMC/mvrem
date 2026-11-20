@@ -1,0 +1,26 @@
+# Quarto / R Markdown scratch output
+.quarto/
+doc/*_files/
+presentation/*_files/
+
+# local scratch (never part of the package)
+tmp/
+
+# R session files
+.Rhistory
+.RData
+.Rproj.user/
+
+# CI output
+check/
+test-results.xml
+
+# the workbench repository, cloned here (separate git repository)
+workbench/
+
+# vignette output (R CMD build puts it in inst/doc; tools/ci/pages.sh in public/)
+inst/doc/
+/doc/
+/Meta/
+vignettes/*.html
+public/

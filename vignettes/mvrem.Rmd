@@ -1,0 +1,255 @@
+---
+title: "Getting started with mvrem"
+output:
+  rmarkdown::html_vignette:
+    toc: true
+    math_method: null
+    pandoc_args: ["--katex", "--wrap=none"]  # TeX stays in <span class="math">, rendered by the
+                                            # vendored KaTeX below (no CDN; works offline)
+    includes:
+      in_header: katex/katex-header.html
+vignette: >
+  %\VignetteIndexEntry{Getting started with mvrem}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+hasInla <- requireNamespace("INLA", quietly = TRUE)
+knitr::opts_chunk$set(comment = "#>", eval = hasInla, fig.width = 7, fig.height = 3.5,
+                      out.width = "100%")
+options(width = 90)
+```
+
+```{r no-inla, eval = !hasInla, echo = FALSE, results = "asis"}
+cat("> **INLA was not installed when this vignette was built, so the code below was not run.**\n")
+```
+
+mvrem fits **multivariate joint models** with INLA: several longitudinal markers and one or
+more outcomes, each with its own family, fixed effects and random effects. An outcome is
+linked to a marker through a scaled copy of the marker's linear predictor: the term
+`scaled(x)` in the outcome's formula adds $\gamma \, \eta_x$ to it, with $\eta_x$ the marker's
+fixed + random effects evaluated at the outcome's covariates (its time, subject, ...), and
+$\gamma$ estimated. The marker and the outcome need not be measured at the same times.
+
+The whole model is written in lme4 notation and fitted with one call, `jsm()`; INLA's
+interface (stacked data, `f()` terms, copies) is built and hidden by the package.
+
+## Installation
+
+INLA is not on CRAN; install it first, then mvrem from GitHub (`htmlwidgets` is optional and
+makes the plots interactive):
+
+```{r install, eval = FALSE}
+install.packages("INLA",
+                 repos = c(getOption("repos"),
+                           INLA = "https://inla.r-inla-download.org/R/stable"),
+                 dep = TRUE)
+install.packages(c("remotes", "htmlwidgets"))
+remotes::install_github("LUMC/mvrem")
+```
+
+```{r library}
+library(mvrem)
+```
+
+## A first model: one outcome, one marker
+
+Simulated data, so the estimates can be compared with the truth: 100 subjects, a Gaussian
+marker `x1` with a correlated random intercept and slope, measured at `t = 0, 0.5, 1, 1.5`,
+and a beta-distributed outcome `y` measured **between** these visits. The outcome depends on
+the marker's current (error-free) value with $\gamma = 0.8$.
+
+```{r simple-data}
+set.seed(1)
+n <- 100
+ids <- sprintf("S%03d", seq_len(n))
+dX <- data.frame(id = rep(ids, each = 4), t = rep(c(0, 0.5, 1, 1.5), n))         # marker visits
+dY <- data.frame(id = rep(ids, each = 4), t = rep(c(0.25, 0.75, 1.25, 1.75), n))  # outcome times
+z0 <- rnorm(n); z1 <- 0.6 * z0 + sqrt(1 - 0.6^2) * rnorm(n)
+b0 <- 0.5 * z0; b1 <- 0.2 * z1                # random intercept (SD 0.5), slope (SD 0.2), cor 0.6
+eta <- function(d) { i <- match(d$id, ids); 1 + 0.5 * d$t + b0[i] + b1[i] * d$t }
+dX$x1 <- eta(dX) + rnorm(nrow(dX), sd = 0.2)                    # marker
+mu <- plogis(-1 + 0.8 * eta(dY))                               # gamma = 0.8
+dY$y <- rbeta(nrow(dY), 20 * mu, 20 * (1 - mu))                # outcome, phi = 20
+dY$y[sample(nrow(dY), 60)] <- NA                               # missing outcomes are predicted
+head(dY, 3)
+head(dX, 3)
+```
+
+### The model
+
+All formulae go in one list. A formula with a `scaled()` term is an outcome, one without is
+a marker. Random effects are written as in lme4, `(1 + t | id)`, or with `re()` to set their
+prior; here the Wishart prior of the block is centred on an lme4 fit of the marker
+(`scale = "data"`). The data are given per response; families default to Gaussian.
+
+```{r simple-model}
+m <- jsm(
+  list(y  ~ 1 + t + scaled(x1),
+       x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(scale = "data"))),
+  data   = list(y = dY, x1 = dX),
+  family = list(y = betaFamily()),
+  criteria = TRUE                     # DIC, WAIC and CPO for modelFit()
+)
+summary(m)
+```
+
+True values: $\gamma = 0.8$, $\phi = 20$; `y` intercept $-1$, no effect of `t`; `x1`
+intercept 1, slope 0.5, SDs 0.5 and 0.2, correlation 0.6, residual SD 0.2.
+
+### Results
+
+`estimatesTable()` collects all estimates (fixed effects, associations, SDs and correlations,
+family parameters) in one table; `format(..., "markdown")` or `"latex"` writes it for a
+report.
+
+```{r simple-estimates, results = "asis"}
+cat(format(estimatesTable(m), "markdown", digits = 2))
+```
+
+`plot()` shows the data of each equation, one line per subject, and after the fit the fitted
+values (open circles: predictions of the missing outcomes). With htmlwidgets installed the
+plot is interactive: hovering a subject highlights it in all panels, a click pins it.
+
+```{r simple-plot}
+plot(m)
+```
+
+Further accessors: `fixedEffects()`, `associations()`, `hyperparameters()`,
+`randomEffects()`, `varianceComponents()` (SDs and correlations rather than INLA's
+precisions), `fittedValues()`, `residuals()` and `modelFit()`:
+
+```{r simple-var}
+varianceComponents(m)
+modelFit(m)
+```
+
+and plots of them: `plotFixedEffects()`, `plotAssociations()`, `plotRandomEffects()`,
+`plotVarianceComponents()`, `plotResiduals()`.
+
+```{r simple-ranef, fig.height = 4}
+plotRandomEffects(m, type = "pairs")
+```
+
+### Predictions
+
+`predict()` gives the posterior of the fitted mean at new rows: new subjects (random effects
+from their distribution) or new times of known subjects (their own random effects).
+
+```{r simple-predict}
+new <- data.frame(id = rep(c("S001", "S002", "new"), each = 5),
+                  t  = rep(seq(0, 2, by = 0.5), 3))
+p <- predict(m, new)
+head(p, 3)
+plot(p)
+```
+
+### The model in a picture and in equations
+
+```{r simple-diagram, fig.height = 2.6}
+plotModel(m)
+```
+
+`latexEquation()` writes the model as LaTeX; with `annotate = "tooltip"` hovering a symbol
+shows its estimate (`"inline"` writes the estimates under the symbols).
+
+```{r simple-equation, results = "asis"}
+cat(format(latexEquation(m, annotate = "tooltip"), delim = "$$"))
+```
+
+## Several outcomes and markers of different types
+
+Each response has its own family; family inputs follow the response after `|`:
+`trials(n)` for binomial, `exposure(pt)` for Poisson, `event(status)` for survival and
+`weights(w)` for observation weights. An outcome may be linked to several markers, and
+arguments of `scaled()` set the prior of its coefficient.
+
+```{r moderate-data}
+set.seed(2)
+n <- 120
+d <- data.frame(id = sprintf("S%03d", rep(seq_len(n), each = 5)), t = rep(0:4 / 2, n))
+u <- matrix(rnorm(n * 3), n)[as.integer(factor(d$id)), ]
+etaX <- 1 + 0.5 * d$t + 0.5 * u[, 1] + 0.2 * u[, 2] * d$t          # Gaussian marker x1
+etaC <- 0.5 + 0.2 * d$t + 0.5 * u[, 3]                              # count marker (log rate)
+d$x1 <- etaX + rnorm(nrow(d), sd = 0.3)
+d$pt <- runif(nrow(d), 0.8, 1.2)
+d$cnt <- rpois(nrow(d), d$pt * exp(etaC))
+muY <- plogis(-1 + 0.3 * d$t + 0.6 * (etaX - 1) + 0.3 * (etaC - 0.5))
+d$y <- rbeta(nrow(d), 30 * muY, 30 * (1 - muY))
+d$n <- 10
+d$k <- rbinom(nrow(d), d$n, pnorm(-0.3 + 0.5 * (etaX - 1)))
+```
+
+```{r moderate-model}
+m2 <- jsm(
+  list(y ~ 1 + t + scaled(x1, prior = normalCoef(0, 1)) + scaled(cnt),
+       k | trials(n) ~ 1 + t + scaled(x1),
+       x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(scale = "data")),
+       cnt | exposure(pt) ~ 1 + t + (1 | id)),
+  data   = d,
+  family = list(y = betaFamily(), k = binomialFamily(link = "probit"), cnt = "poisson")
+)
+associations(m2)
+```
+
+True values: $\gamma_{y,x_1} = 0.6$, $\gamma_{y,\mathit{cnt}} = 0.3$, $\gamma_{k,x_1} = 0.5$.
+
+```{r moderate-diagram, fig.height = 3.5}
+plotModel(m2)
+```
+
+## A survival outcome
+
+A time to event with right censoring is written `time | event(status) ~ ...` with
+`weibullSurvFamily()` or `exponentialSurvFamily()`, one row per subject. The marker enters the
+hazard at the covariate values of the survival row: `t = 0` below, the subject's marker level
+at baseline. The two parts have their own data frames.
+
+```{r survival}
+set.seed(6)
+n <- 200
+b0 <- rnorm(n, sd = 0.5); b1 <- rnorm(n, sd = 0.25)
+etaS <- function(i, t) 1 + 0.4 * t + b0[i] + b1[i] * t
+T <- (-log(runif(n)) / exp(-2.5 + 0.8 * etaS(seq_len(n), 0)))^(1 / 1.5)  # Weibull, alpha 1.5
+C <- runif(n, 1, 4)
+dSurv <- data.frame(id = sprintf("S%03d", seq_len(n)), time = pmin(T, C),
+                    status = as.integer(T <= C), t = 0)
+dMark <- data.frame(id = rep(dSurv$id, each = 5), t = rep(c(0, 0.5, 1, 1.5, 2), n))
+dMark$x1 <- etaS(rep(seq_len(n), each = 5), dMark$t) + rnorm(nrow(dMark), sd = 0.2)
+dMark <- dMark[dMark$t <= rep(dSurv$time, each = 5), ]               # visits before the event
+
+m3 <- jsm(
+  list(time | event(status) ~ 1 + scaled(x1),
+       x1 ~ 1 + t + (1 + t || id)),
+  dataOut = dSurv, dataLong = dMark,
+  family  = list(time = weibullSurvFamily())
+)
+estimatesTable(m3)
+```
+
+True values: $\gamma = 0.8$ (a log hazard ratio per unit of the marker), Weibull shape
+$\alpha = 1.5$.
+
+## Overview
+
+| Function | Gives |
+|---|---|
+| `jsm(form, data, family)` | build and fit the model (`fit = FALSE`: build only) |
+| `summary()`, `estimatesTable()` | all estimates, readable names |
+| `fixedEffects()`, `associations()`, `hyperparameters()`, `coef()` | posterior summaries |
+| `randomEffects()`, `varianceComponents()` | subject effects; SDs, correlations, covariance matrices |
+| `fittedValues()`, `residuals()`, `modelFit()` | fitted means, residuals; DIC, WAIC, log score |
+| `predict(m, newdata)` | posterior of the mean at new rows; `plot()` of the result |
+| `plot()`, `plotResiduals()`, `plotRandomEffects()`, `plotVarianceComponents()`, `plotFixedEffects()`, `plotAssociations()` | data and fitted values; diagnostics; posteriors |
+| `plotModel()`, `latexEquation()` | diagram and equations of the model |
+| `update()`, `refit()` | re-run with changed arguments / INLA options |
+| `inlaFormula()`, `inlaData()`, `inlaArguments()`, `inlaFit()`, `formatInlaFormula()` | what was given to INLA, and its result |
+
+Families: `gaussianFamily()`, `studentTFamily()`, `lognormalFamily()`, `gammaFamily()`,
+`betaFamily()`, `poissonFamily()`, `negBinomialFamily()`, `binomialFamily()`,
+`betaBinomialFamily()`, zero-inflated Poisson and negative binomial, `weibullSurvFamily()`,
+`exponentialSurvFamily()` and `inlaFamily()` for any other INLA likelihood. Priors:
+`gammaPrec()`, `pcSd()`, `halfNormalSd()`, `halfCauchySd()` (also scaled from the data),
+`wishartPrec()` for correlated blocks and `normalCoef()` for associations. See their help pages
+for details.
