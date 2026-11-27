@@ -5,6 +5,11 @@
 #' observation, `residuals()` adds the residuals (observed value minus fitted
 #' mean) and `modelFit()` gives the criteria for model comparison.
 #'
+#' A latent equation (see [latentSpec()]) has no observations; `fittedValues(x, "eta")`
+#' gives the posterior of its latent field at its evaluation points (one row per
+#' combination of its variables in the data of the outcomes linked to it; no `observed`
+#' column; `type` makes no difference).
+#'
 #' Fitted means are on the scale of the response's mean: for `trials()`
 #' responses a proportion and for `exposure()` responses a rate (the observed
 #' value in column `observed` is on the same scale). Rows with a missing
@@ -24,10 +29,14 @@
 #'   `mean`, `sd`, `q0.025`, `q0.5`, `q0.975`, `mode`; one row per observation.
 #' * `residuals()`: the same (`type = "mean"`) with a column `residual` =
 #'   `observed - mean` (`NA` for a missing response); see [plotResiduals()].
-#' * `modelFit()`: a data frame with one row per response and an `overall`
-#'   row: `dic`, `waic`, `logScore` (minus the sum of log CPO, smaller is
-#'   better), `cpoFailures` (observations whose CPO INLA flags as unreliable)
-#'   and, for the overall row, the log marginal likelihood `mlik`.
+#' * `modelFit()`: a data frame with one row per observed response, an
+#'   `observations` row (the observation rows of all responses together) and an
+#'   `overall` row (INLA's totals over all rows of the model, which include the
+#'   zero-equation and latent-equation rows: pseudo-observations whose number grows
+#'   with the links of the model, so compare models with the `observations` row or the
+#'   rows of the responses they share): `dic`, `waic`, `logScore` (minus the sum of log
+#'   CPO, smaller is better), `cpoFailures` (observations whose CPO INLA flags as
+#'   unreliable) and, for the overall row, the log marginal likelihood `mlik`.
 #' @examples
 #' \dontrun{
 #' m <- jsm(list(y ~ t + scaled(x1)), list(x1 ~ t + (1 + t | id)), data = d, criteria = TRUE)
@@ -46,7 +55,10 @@ fittedValues <- function(x, ...) UseMethod("fittedValues")
 fittedValues.mvremModel <- function(x, response = NULL, type = c("mean", "linear"), ...) {
   needFit(x)
   type <- match.arg(type)
-  resp <- checkResponses(x, response)
+  # latent equations (E38) only when named: they have no observations
+  resp <- selectResponses(x, response, observed = is.null(response))
+  latent <- intersect(resp, names(latentParts(x$forms)))
+  resp <- setdiff(resp, latent)
   tab <- statTable(if (type == "mean") x$fit$summary.fitted.values else
     x$fit$summary.linear.predictor)
   st <- stackRows(x$inla)
@@ -72,6 +84,8 @@ fittedValues.mvremModel <- function(x, response = NULL, type = c("mean", "linear
     }
     out[[r]] <- cbind(part, tab[rows, , drop = FALSE])
   }
+  for (r in latent) out[[r]] <- latentValues(x, r)
+  out <- out[orderResponses(x, names(out))]
   out <- rbindFill(out)
   rownames(out) <- NULL
   out
@@ -82,8 +96,8 @@ fittedValues.mvremModel <- function(x, response = NULL, type = c("mean", "linear
 # explicitly give a warning, or an error when nothing is left.
 residualResponses <- function(x, response) {
   given <- !is.null(response)
-  response <- checkResponses(x, response)
-  surv <- response[vapply(response, function(r) isTRUE(x$inla$survival[r]), NA)]
+  response <- selectResponses(x, response, observed = TRUE)
+  surv <- intersect(response, survivalResponses(x$inla))
   response <- setdiff(response, surv)
   if (!length(response))
     stop("No residuals: the selected responses are survival responses.", call. = FALSE)
@@ -123,13 +137,18 @@ modelFit.mvremModel <- function(x, ...) {
                cpoFailures = sum(f$cpo$failure[rows] > 0, na.rm = TRUE),
                mlik = NA_real_)
   }
-  resp <- checkResponses(x, NULL)
-  tab <- do.call(rbind, lapply(resp, function(r) one(observationRows(block, r))))
+  resp <- selectResponses(x, NULL, observed = TRUE)
+  obsRows <- lapply(resp, function(r) observationRows(block, r))
+  tab <- do.call(rbind, lapply(obsRows, one))
+  # Q5 (E38): the observation rows of all responses together, and INLA's totals over all rows
+  # (also the zero-equation and latent rows, pseudo-observations with a fixed precision)
+  obs <- one(unlist(obsRows))
   all <- one(seq_along(block))
   all$dic <- f$dic$dic
   all$waic <- f$waic$waic
   all$mlik <- unname(f$mlik[1L])
-  out <- cbind(response = c(resp, "overall"), rbind(tab, all), stringsAsFactors = FALSE)
+  out <- cbind(response = c(resp, "observations", "overall"), rbind(tab, obs, all),
+               stringsAsFactors = FALSE)
   rownames(out) <- NULL
   out
 }

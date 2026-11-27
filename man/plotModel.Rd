@@ -33,8 +33,7 @@ Draws the structure of a model as a path diagram: one box per equation (the
 longitudinal responses on the left, the outcomes on the right) with its
 response, family (and link, \code{trials()} / \code{exposure()} / \code{event()} / \code{weights()} input) and
 random-effect blocks, and one arrow per association from a longitudinal
-response to an outcome, labelled with its parameter \code{gamma}. A longitudinal
-response named in no \code{scaled()} term has no arrow.
+response to an outcome, labelled with its parameter \code{gamma}.
 }
 \details{
 For a fitted model the arrows carry the posterior mean and the 95\% credible

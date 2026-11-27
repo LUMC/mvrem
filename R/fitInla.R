@@ -23,11 +23,19 @@ stackRows <- function(inl, n = Inf) {
   out
 }
 
-# The `.block` label of a stack part of response r: "y: observations" (part "main") or
-# "x1: zero equations for y" (the zero part for outcome y).
+# The survival responses of a buildInlaFormula() result (names of `inl$survival` that are TRUE).
+survivalResponses <- function(inl) names(inl$survival)[vapply(inl$survival, isTRUE, NA)]
+
+# The `.block` label of a stack part of response r: "y: observations" (part "main"),
+# "x1: zero equations for y" (the zero part for outcome y) or "eta: latent equations".
 stackBlockLabel <- function(r, part = "main") {
-  if (part == "main") paste0(r, ": observations") else paste0(r, ": zero equations for ", part)
+  if (part == "main") return(paste0(r, ": observations"))
+  if (part == latentStackPart) return(paste0(r, ": latent equations"))
+  paste0(r, ": zero equations for ", part)
 }
+
+# The name of a latent equation's only stack part (its zero rows; E38).
+latentStackPart <- ".latent"
 
 # Positions of the observation rows of response r among the rows of stackRows() (= INLA's
 # fitted values / linear predictor), given the `.block` column as character.
@@ -55,7 +63,7 @@ inlaArgumentList <- function(inl, options = list()) {
   resp <- names(inl$families)
   inputs <- unlist(unname(lapply(inl$inputs, as.list)), recursive = FALSE)  # list of Ntrials = col, ...
   data <- as.list(st[setdiff(names(st), c(resp, ".block", unlist(inputs, use.names = FALSE)))])
-  surv <- names(inl$survival)[inl$survival]
+  surv <- survivalResponses(inl)
   if (length(surv)) {
     # a survival response is an inla.surv object (time, event); the response
     # object is then a list of the response columns (one likelihood each)
@@ -91,19 +99,28 @@ inlaArgumentList <- function(inl, options = list()) {
   args$control.predictor <- list(compute = TRUE, link = lik)
 
   args$verbose <- isTRUE(options$verbose)
-  if (!is.null(options$threads)) args$num.threads <- options$threads
-  extra <- options$inlaOptions
-  if (length(extra)) {
-    if (is.null(names(extra)) || any(names(extra) == ""))
-      stop("`inlaOptions` must be a named list.", call. = FALSE)
-    bad <- intersect(names(extra), reservedInlaArguments)
-    if (length(bad))
-      stop("`inlaOptions` must not set ", paste0("`", bad, "`", collapse = ", "),
-           ": mvrem builds ", if (length(bad) > 1L) "these" else "this", " from the model.",
-           call. = FALSE)
-    args <- utils::modifyList(args, extra, keep.null = TRUE)
-  }
+  checkInlaOptions(options$inlaOptions, options$threads)
+  threads <- resolveThreads(options$threads)
+  if (!is.null(threads)) args$num.threads <- threads
+  if (length(options$inlaOptions))
+    args <- utils::modifyList(args, options$inlaOptions, keep.null = TRUE)
   args
+}
+
+# `inlaOptions` must be a named list without the arguments mvrem builds from the model;
+# `threads` see checkThreads(). Checked by jsm(), refit() and
+# predict() up front, and again when the inla() arguments are assembled.
+checkInlaOptions <- function(inlaOptions, threads = NULL) {
+  if (is.null(inlaOptions)) inlaOptions <- list()
+  if (!isNamedList(inlaOptions))
+    stop("`inlaOptions` must be a named list.", call. = FALSE)
+  bad <- intersect(names(inlaOptions), reservedInlaArguments)
+  if (length(bad))
+    stop("`inlaOptions` must not set ", paste0("`", bad, "`", collapse = ", "),
+         ": mvrem builds ", if (length(bad) > 1L) "these" else "this", " from the model.",
+         call. = FALSE)
+  checkThreads(threads)
+  invisible()
 }
 
 requireInla <- function() {
@@ -141,6 +158,8 @@ statTable <- function(s) {
   s
 }
 
+# fixedEffects(): one row per fixed-effect column of every response, in the model's order,
+# with INLA's summary matched by the column's INLA name (`.inla`).
 fixedEffectsTable <- function(x) {
   needFit(x)
   sf <- x$fit$summary.fixed
@@ -161,57 +180,79 @@ fixedEffectsTable <- function(x) {
 # (`.inla`) with mvrem's labels: per random block either `Precision for <index>` (a single
 # effect; each effect of a `||` block is its own block) or, for a correlated block of k
 # effects (one iid<k>d / iidkd field on the first index), `Precision for <index> (component
-# j)` and `Rho i:j for <index>`; per scaled() term `Beta for <scaled index>`.
+# j)` and `Rho i:j for <index>`; per scaled() term `Beta for <scaled index>`. This is the ONLY
+# place that spells INLA's row names (D1): consumers look rows up by `response`, `block` (the
+# position of the block in `inl$random[[response]]`), `effect` / `effect2` or `link`, and read
+# `.inla` (the row of `summary.hyperpar` / `marginals.hyperpar`), `internal` (the name of the
+# internal marginal, log precision) and `short` ("prec", "rho", "beta").
 latentHyperRows <- function(inl) {
   effLabel <- function(e) effectLabel(e, inl$naming)
   rows <- list()
-  add <- function(.inla, response, parameter, type, link = NA, group = NA, effect = NA, effect2 = NA)
+  add <- function(.inla, response, parameter, type, short, link = NA, group = NA, effect = NA,
+                  effect2 = NA, block = NA, internal = NA)
     rows[[length(rows) + 1L]] <<- data.frame(
-      .inla = .inla, response = response, parameter = parameter, type = type, link = link,
-      group = group, effect = effect, effect2 = effect2, stringsAsFactors = FALSE)
-  for (r in names(inl$random)) for (b in inl$random[[r]]) {
+      .inla = .inla, response = response, parameter = parameter, type = type, short = short,
+      link = link, group = group, effect = effect, effect2 = effect2, block = block,
+      internal = internal, stringsAsFactors = FALSE)
+  for (r in names(inl$random)) for (i in seq_along(inl$random[[r]])) {
+    b <- inl$random[[r]][[i]]
     k <- length(b$effects)
     if (k == 1L) {
-      add(paste0("Precision for ", b$index), r, paste0("precision of ", effLabel(b$effects), " | ", b$group),
-          "random", group = b$group, effect = b$effects)
+      add(paste0("Precision for ", b$index), r, paste0("precision of ", effectGroupLabel(b$effects, b$group, inl$naming)),
+          "random", "prec", group = b$group, effect = b$effects, block = i,
+          internal = paste0("Log precision for ", b$index))
       next
     }
     for (j in seq_len(k))
       add(paste0("Precision for ", b$index[1L], " (component ", j, ")"), r,
-          paste0("precision of ", effLabel(b$effects[j]), " | ", b$group), "random",
-          group = b$group, effect = b$effects[j])
-    for (i in seq_len(k - 1L)) for (j in (i + 1L):k)
-      add(paste0("Rho", i, ":", j, " for ", b$index[1L]), r,
-          paste0("correlation of ", effLabel(b$effects[i]), ", ", effLabel(b$effects[j]), " | ", b$group),
-          "random", group = b$group, effect = b$effects[i], effect2 = b$effects[j])
+          paste0("precision of ", effectGroupLabel(b$effects[j], b$group, inl$naming)), "random", "prec",
+          group = b$group, effect = b$effects[j], block = i,
+          internal = paste0("Log precision for ", b$index[1L], " (component ", j, ")"))
+    for (i2 in seq_len(k - 1L)) for (j in (i2 + 1L):k)
+      add(paste0("Rho", i2, ":", j, " for ", b$index[1L]), r,
+          paste0("correlation of ", effectGroupLabel(b$effects[c(i2, j)], b$group, inl$naming)),
+          "random", "rho", group = b$group, effect = b$effects[i2], effect2 = b$effects[j], block = i)
   }
   for (sc in inl$scaled)
-    add(paste0("Beta for ", sc$index), sc$out, paste0("gamma (", sc$long, " -> ", sc$out, ")"),
-        "association", link = sc$long)
-  if (!length(rows))
-    return(data.frame(.inla = character(), response = character(), parameter = character(),
-                      type = character(), link = character(), group = character(),
-                      effect = character(), effect2 = character()))
-  do.call(rbind, rows)
+    add(paste0("Beta for ", sc$index), sc$out, paste0("gamma (", linkLabel(sc$long, sc$out), ")"),
+        "association", "beta", link = sc$long)
+  bindRows(rows, data.frame(.inla = character(), response = character(), parameter = character(),
+                            type = character(), short = character(), link = character(),
+                            group = character(), effect = character(), effect2 = character(),
+                            block = integer(), internal = character()))
 }
+
+# The rows of latentHyperRows() of one random-effect block (response r, position i in
+# `inl$random[[r]]`): its precisions in effect order (`short == "prec"`), then the correlations.
+blockHyperRows <- function(known, r, i) known[known$response %in% r & known$block %in% i, , drop = FALSE]
+
+# The value of a FIXED likelihood hyperparameter of response r (INLA's `short.name`), which
+# `summary.hyperpar` does not list: from.theta(initial) of the fit's `all.hyper`; NULL if the
+# hyperparameter is estimated or does not exist.
+fixedFamilyHyper <- function(x, r, short) {
+  i <- match(x$inla$responses[[r]], names(x$inla$families))
+  for (h in x$fit$all.hyper$family[[i]]$hyper)
+    if (isTRUE(h$fixed) && isTRUE(h$short.name == short)) return(as.vector(h$from.theta(h$initial)))
+  NULL
+}
+
+# Columns of hyperTable() that hyperparameters() drops: the family's / latent term's short
+# name (`prec`, `phi`, `rho`, `beta`, ...), the linked longitudinal response of an association,
+# the group and effect(s) of a random-effect precision / correlation, INLA's row name.
+hyperInternalColumns <- c("short", "link", "group", "effect", "effect2", ".inla")
 
 # Hyperparameters in the order of INLA's summary: likelihoods (non-fixed ones),
 # then the latent terms in formula order. Rows are labelled from the model;
-# anything not recognised keeps INLA's own name.
-hyperInternalColumns <- c("link", "group", "effect", "effect2", ".inla")
-
+# anything not recognised keeps INLA's own name (`type` NA).
 hyperTable <- function(x) {
   needFit(x)
   inl <- x$inla
   sh <- x$fit$summary.hyperpar
   n <- if (is.null(sh)) 0L else nrow(sh)
-  # `link`, `group`, `effect`, `effect2`, `.inla` are internal (dropped by hyperparameters()):
-  # the linked longitudinal response of an association, the group and effect(s) of a
-  # random-effect precision / correlation, INLA's row name
   lab <- data.frame(response = rep(NA_character_, n), parameter = rownames(sh), type = NA_character_,
-                    link = NA_character_, group = NA_character_, effect = NA_character_,
-                    effect2 = NA_character_, .inla = if (n) rownames(sh) else character(),
-                    stringsAsFactors = FALSE)
+                    short = NA_character_, link = NA_character_, group = NA_character_,
+                    effect = NA_character_, effect2 = NA_character_,
+                    .inla = if (n) rownames(sh) else character(), stringsAsFactors = FALSE)
   if (n == 0L) return(cbind(lab, statTable(data.frame(mean = numeric(), sd = numeric()))))
   rows <- rownames(sh)
 
@@ -234,6 +275,7 @@ hyperTable <- function(x) {
       short <- if (is.null(h$short.name)) "hyper" else h$short.name
       lab$response[k] <- r
       lab$type[k] <- "family"
+      lab$short[k] <- short
       lab$parameter[k] <- if (short == "prec") {
         if (identical(unname(inl$families[col]), "gaussian")) "residual precision" else "precision"
       } else short
@@ -244,7 +286,7 @@ hyperTable <- function(x) {
   known <- latentHyperRows(inl)
   j <- which(is.na(lab$type) & rows %in% known$.inla)
   k <- match(rows[j], known$.inla)
-  cols <- c("response", "parameter", "type", "link", "group", "effect", "effect2")
+  cols <- c("response", "parameter", "type", "short", "link", "group", "effect", "effect2")
   lab[j, cols] <- known[k, cols]
   out <- cbind(lab, statTable(sh))
   rownames(out) <- NULL

@@ -16,7 +16,7 @@ test_that("jsm(fit = FALSE): all components, empty options, no fit", {
   m <- fxModel("multi", fit = FALSE)
   expect_s3_class(m, "jsm")
   expect_s3_class(m, "mvremModel")
-  expect_named(m, c("call", "forms", "data", "dataSummary", "inla", "time", "options", "fit", "inlaError"))
+  expect_named(m, c("call", "forms", "data", "display", "dataSummary", "inla", "time", "options", "fit", "inlaError"))
   expect_null(m$fit)
   expect_null(m$inlaError)
   expect_null(inlaFit(m))
@@ -88,7 +88,7 @@ test_that("jsm(): dataOut / dataLong and familyOut follow prepareData() / collec
 
 test_that("jsm() options: threads, verbose and criteria reach the INLA arguments", {
   s <- fxSpec("beta")
-  m <- jsm(s$formOut, s$formLong, data = s$data, family = s$family, fit = FALSE,
+  m <- fxBuild("beta",
            threads = 2, verbose = TRUE, criteria = TRUE,
            inlaOptions = list(control.compute = list(dic = FALSE, config = TRUE)))
   a <- inlaArguments(m)
@@ -97,16 +97,16 @@ test_that("jsm() options: threads, verbose and criteria reach the INLA arguments
   # criteria = TRUE is merged UNDER the user's control.compute
   expect_equal(a$control.compute, list(dic = FALSE, waic = TRUE, cpo = TRUE, config = TRUE))
   expect_equal(m$options$inlaOptions$control.compute$waic, TRUE)
-  m2 <- jsm(s$formOut, s$formLong, data = s$data, family = s$family, fit = FALSE, criteria = TRUE)
+  m2 <- fxBuild("beta", criteria = TRUE)
   expect_equal(inlaArguments(m2)$control.compute, list(dic = TRUE, waic = TRUE, cpo = TRUE))
-  m3 <- jsm(s$formOut, s$formLong, data = s$data, family = s$family, fit = FALSE,
+  m3 <- fxBuild("beta",
             inlaOptions = list(control.compute = list(dic = TRUE)))
   expect_equal(inlaArguments(m3)$control.compute, list(dic = TRUE))
 })
 
 test_that("jsm(inlaOptions = ): a named list; the arguments mvrem builds are refused", {
   s <- fxSpec("beta")
-  build <- function(opt) jsm(s$formOut, s$formLong, data = s$data, family = s$family, fit = FALSE,
+  build <- function(opt) fxBuild("beta",
                              inlaOptions = opt)
   expect_error(inlaArguments(build(list(1))), "must be a named list")
   for (nm in c("formula", "family", "data", "control.family", "Ntrials", "E"))
@@ -166,7 +166,7 @@ test_that("jsm(naming = ) and options(mvrem.naming) rename the INLA objects", {
   expect_match(ftxt, "re_x1_1_id", fixed = TRUE)
   expect_match(ftxt, "sc_y_x1", fixed = TRUE)
   withr::local_options(mvrem.naming = nm)
-  m2 <- jsm(s$formOut, s$formLong, data = s$data, family = s$family, fit = FALSE)
+  m2 <- fxBuild("beta")
   expect_equal(deparse(inlaFormula(m2)), deparse(inlaFormula(m)))
 })
 
@@ -197,7 +197,7 @@ test_that("effectLabel(): the intercept gets naming$interceptLabel, other effect
 test_that("jsm(naming = namingScheme(interceptLabel = )) is stored and renames no INLA object", {
   ref <- fxModel("beta", fit = FALSE)
   s <- fxSpec("beta")
-  m <- jsm(s$formOut, s$formLong, data = s$data, family = s$family, fit = FALSE,
+  m <- fxBuild("beta",
            naming = namingScheme(interceptLabel = "b0"))
   expect_equal(inlaSpec(m)$naming$interceptLabel, "b0")
   expect_equal(inlaSpec(ref)$naming$interceptLabel, "(Intercept)")
@@ -209,7 +209,7 @@ test_that("jsm(naming = namingScheme(interceptLabel = )) is stored and renames n
 test_that("jsm() without INLA gives a clear error unless fit = FALSE", {
   local_mocked_bindings(hasInla = function() FALSE)
   s <- fxSpec("beta")
-  expect_s3_class(jsm(s$formOut, s$formLong, data = s$data, family = s$family, fit = FALSE), "jsm")
+  expect_s3_class(fxBuild("beta"), "jsm")
   expect_error(jsm(s$formOut, s$formLong, data = s$data, family = s$family), "INLA package is required")
   expect_error(refit(fxModel("beta", fit = FALSE)), "INLA package is required")
 })
@@ -352,7 +352,7 @@ test_that("refit() with other options fits again and replaces the options; dic o
   # criteria incomplete: modelFit() explains how to get them
   expect_error(modelFit(r2), "without model criteria.*criteria = TRUE")
   expect_equal(fixedEffects(r2)$mean, fixedEffects(m)$mean, tolerance = 1e-3)
-  expect_equal(modelFit(m)$dic[3], inlaFit(r2)$dic$dic, tolerance = 1e-3)
+  expect_equal(modelFit(m)$dic[modelFit(m)$response == "overall"], inlaFit(r2)$dic$dic, tolerance = 1e-3)
 })
 
 test_that("refit(): unknown arguments are an error", {
@@ -499,7 +499,9 @@ test_that("hyperTable() carries link / group / effect columns that the accessors
   m <- fxModel("multi")
   ht <- hyperTable(m)
   expect_true(all(hyperInternalColumns %in% names(ht)))
-  expect_equal(hyperInternalColumns, c("link", "group", "effect", "effect2", ".inla"))
+  expect_equal(hyperInternalColumns, c("short", "link", "group", "effect", "effect2", ".inla"))
+  expect_equal(ht$short[ht$type == "family"], "prec")                     # gaussian x1 only
+  expect_equal(hyperTable(fxModel("beta"))$short[1:2], c("phi", "prec"))  # beta: phi; gaussian x1: prec
   expect_equal(ht$link[ht$type == "association"], c("x1", "x2", "x2"))
   expect_true(all(is.na(ht$link[ht$type != "association"])))
   expect_equal(ht$group[ht$type == "random"], rep("id", 4))
@@ -858,6 +860,102 @@ test_that("residuals(): fittedValues() plus a residual column on the response sc
   expect_error(residuals(m, "zz"), "Unknown response")
 })
 
+test_that("kaplanMeier(): survival, counts and log(-log) interval as survival::survfit()", {
+  skip_if_not_installed("survival")
+  d <- fxData()$surv
+  km <- kaplanMeier(d$time, d$status)
+  sf <- summary(survival::survfit(survival::Surv(time, status) ~ 1, data = d, conf.type = "log-log"),
+                censored = TRUE)
+  expect_equal(km$time, c(0, sf$time))
+  expect_equal(km$surv, c(1, sf$surv))
+  expect_equal(km$n.risk, c(nrow(d), sf$n.risk))
+  expect_equal(km$n.event, c(0, sf$n.event))
+  ok <- is.finite(km$lower[-1])
+  expect_equal(km$lower[-1][ok], sf$lower[ok], tolerance = 1e-6)
+  expect_equal(km$upper[-1][ok], sf$upper[ok], tolerance = 1e-6)
+})
+
+test_that("survivalCurves(): Kaplan-Meier and the plug-in model curve of a fit without config (E31)", {
+  m <- fxModel("surv")
+  sc <- survivalCurves(m)
+  expect_s3_class(sc, "mvremSurvival")
+  expect_false(attr(sc, "band"))
+  expect_equal(unique(sc$level), "all")
+  md <- sc[sc$curve == "model", ]
+  expect_equal(nrow(md), 101L)
+  expect_equal(range(md$time), c(0, max(fxData()$surv$time)))
+  expect_equal(md$surv[1], 1)
+  expect_true(all(diff(md$surv) <= 0))
+  expect_true(all(is.na(md$lower)))
+  # = the mean over subjects of exp(-exp(eta_i) t^alpha) at the posterior means
+  rows <- observationRows(as.character(stackRows(m$inla)$.block), "time")
+  eta <- m$fit$summary.linear.predictor$mean[rows]
+  alpha <- m$fit$summary.hyperpar["alpha parameter for weibullsurv", "mean"]
+  expect_equal(md$surv[50], mean(exp(-exp(eta) * md$time[50]^alpha)))
+  expect_output(print(sc), "posterior means")
+})
+
+test_that("survivalCurves(): per level of `colorBy`, with a 95% band from posterior draws (config = TRUE)", {
+  m <- fxSurvivalArm()
+  sc <- survivalCurves(m, colorBy = "arm", seed = 1)
+  expect_true(attr(sc, "band"))
+  expect_equal(attr(sc, "nsamples"), 200L)
+  expect_setequal(unique(sc$level), c("A", "B"))
+  md <- sc[sc$curve == "model", ]
+  expect_true(all(md$lower <= md$surv + 1e-12 & md$surv <= md$upper + 1e-12))
+  expect_true(all(md$upper[md$time > 0] - md$lower[md$time > 0] > 0))
+  # each level's Kaplan-Meier uses only its subjects
+  arm <- plotData(m)$time$arm                                     # (a display column)
+  expect_equal(sc$n.risk[sc$curve == "km" & sc$level == "A"][1], sum(arm == "A"))
+  # close to the plug-in curve; a seed makes it reproducible and leaves the RNG state alone
+  set.seed(5); r1 <- runif(1)
+  set.seed(5); sc2 <- survivalCurves(m, colorBy = "arm", seed = 1); r2 <- runif(1)
+  expect_equal(r1, r2)
+  expect_equal(sc2, sc)
+  expect_false(isTRUE(all.equal(survivalCurves(m, colorBy = "arm")$surv, sc$surv)))   # seed = NULL
+  m0 <- m; m0$fit$misc$configs <- NULL
+  p0 <- survivalCurves(m0, colorBy = "arm")
+  expect_lt(max(abs(p0$surv[p0$curve == "model"] - md$surv)), 0.05)
+  expect_output(print(sc), "95% band from 200 posterior draws")
+})
+
+test_that("survivalCurves(): errors without a fit, a survival outcome or a valid `colorBy`", {
+  expect_error(survivalCurves(fxModel("surv", fit = FALSE)), "not fitted")
+  expect_error(survivalCurves(fxModel("beta")), "no survival outcome")
+  expect_error(survivalCurves(fxModel("surv"), "x1"), "Not a survival response: x1")
+  expect_error(survivalCurves(fxModel("surv"), colorBy = "nope"),
+               "`colorBy` = 'nope' is not a categorical variable \\(2 to 12 levels\\) of the data of 'time'")
+  expect_error(survivalCurves(fxSurvivalArm(), colorBy = "time"), "candidates: arm")   # numeric (F4b)
+  expect_error(survivalCurves(fxModel("surv"), nTimes = 1), "`nTimes` must be a single whole number >= 2")
+  expect_error(survivalCurves(fxModel("surv"), nsamples = 1.5), "`nsamples` must be")
+})
+
+test_that("survivalCurves(): a missing value of `colorBy` is the level '(missing)' (B25)", {
+  m <- fxSurvivalArm()
+  m$display$out$time$arm[1:3] <- NA
+  sc <- survivalCurves(m, colorBy = "arm", seed = 1)
+  expect_setequal(unique(sc$level), c("A", "B", "(missing)"))
+  expect_equal(sc$n.risk[sc$curve == "km" & sc$level == "(missing)"][1], 3)
+  expect_true(all(is.finite(sc$surv)))
+  expect_no_error(withNullDevice(plot(m, colorBy = "arm", interactive = FALSE)))
+})
+
+test_that("survivalCurves(): a Weibull outcome with a FIXED shape uses that shape (B26)", {
+  s <- fxSpec("surv")
+  s$family$time <- weibullSurvFamily(alpha = list(initial = 0, fixed = TRUE))   # alpha = exp(0.1 * 0) = 1
+  m <- suppressMessages(do.call(jsm, s))
+  skip_if(is.null(m$fit), "INLA failed")
+  expect_false(any(hyperTable(m)$short %in% "alpha"))
+  sc <- survivalCurves(m)
+  md <- sc[sc$curve == "model", ]
+  expect_true(all(is.finite(md$surv)))
+  rows <- observationRows(as.character(stackRows(m$inla)$.block), "time")
+  eta <- m$fit$summary.linear.predictor$mean[rows]
+  expect_equal(md$surv[50], mean(exp(-exp(eta) * md$time[50])))          # alpha = 1
+  expect_equal(fixedFamilyHyper(m, "time", "alpha"), 1)
+  expect_null(fixedFamilyHyper(fxModel("surv"), "time", "alpha"))
+})
+
 test_that("residuals(): survival responses are skipped, with a warning when named", {
   ms <- fxModel("surv")
   expect_no_warning(rs <- residuals(ms))                   # all responses: silently without time
@@ -869,20 +967,23 @@ test_that("residuals(): survival responses are skipped, with a warning when name
   expect_warning(expect_equal(residualResponses(ms, c("time", "x1")), "x1"), "time; skipped")
 })
 
-test_that("modelFit(): one row per response + overall, INLA's totals in the overall row", {
+test_that("modelFit(): one row per response, the observations together, INLA's totals in the overall row", {
   m <- fxModel("multi")
   mf <- modelFit(m)
   expect_named(mf, c("response", "dic", "waic", "logScore", "cpoFailures", "mlik"))
-  expect_equal(mf$response, c(fxCounts()$responses, "overall"))
-  expect_true(all(is.na(mf$mlik[1:4])))
-  expect_true(is.finite(mf$mlik[5]))
-  expect_equal(mf$mlik[5], unname(inlaFit(m)$mlik[1]))
-  expect_equal(mf$dic[5], inlaFit(m)$dic$dic)
-  expect_equal(mf$waic[5], inlaFit(m)$waic$waic)
+  expect_equal(mf$response, c(fxCounts()$responses, "observations", "overall"))
+  expect_true(all(is.na(mf$mlik[1:5])))
+  expect_true(is.finite(mf$mlik[6]))
+  expect_equal(mf$mlik[6], unname(inlaFit(m)$mlik[1]))
+  expect_equal(mf$dic[6], inlaFit(m)$dic$dic)
+  expect_equal(mf$waic[6], inlaFit(m)$waic$waic)
+  # Q5 (E38): the observation rows only (no zero-equation rows): the sum of the responses' rows
+  expect_equal(mf$waic[5], sum(mf$waic[1:4]), tolerance = 1e-8)
+  expect_equal(mf$logScore[5], sum(mf$logScore[1:4]), tolerance = 1e-8)
   expect_true(all(is.finite(mf$dic) & is.finite(mf$waic) & is.finite(mf$logScore)))
   expect_true(all(mf$cpoFailures >= 0))
   expect_true(all(is.finite(modelFit(fxModel("surv"))$logScore)))
-  expect_equal(modelFit(fxModel("beta"))$response, c("y", "x1", "overall"))
+  expect_equal(modelFit(fxModel("beta"))$response, c("y", "x1", "observations", "overall"))
 })
 
 test_that("modelFit() works with the criteria given through inlaOptions instead of criteria = TRUE", {
@@ -985,7 +1086,7 @@ test_that("format(): the text style is what print() shows; digits; unknown style
   expect_match(txt[2], trimws(formatC(signif(et$mean[1], 2), digits = 2, format = "g")), fixed = TRUE)
   expect_false(grepl(trimws(formatC(signif(et$mean[1], 4), digits = 4, format = "g")), txt[2], fixed = TRUE))
   expect_match(format(et, "text", digits = 2), "gamma \\(x1 -> y\\) +[0-9.]+ \\([0-9.]+\\) +\\[[0-9.-]+, [0-9.]+\\]")
-  expect_snapshot(print(et, digits = 2))
+  expect_snapshot(cat(maskNumbers(format(et, "text", digits = 2))))
 })
 
 test_that("format(style = 'markdown'): a pipe table, `|` of labels escaped, response on its first row", {
@@ -997,7 +1098,7 @@ test_that("format(style = 'markdown'): a pipe table, `|` of labels escaped, resp
   expect_true(any(grepl("SD (Intercept) \\| id", md, fixed = TRUE)))
   expect_true(all(lengths(regmatches(md, gregexpr("(?<!\\\\)\\|", md, perl = TRUE))) == 5L))
   expect_equal(sum(grepl("^\\| x1 \\|", md)), 1L)
-  expect_snapshot(cat(format(et, "markdown", digits = 2)))
+  expect_snapshot(cat(maskNumbers(format(et, "markdown", digits = 2))))
 })
 
 test_that("format(style = 'latex'): a tabular, -> as $\\to$, special characters escaped", {
@@ -1008,7 +1109,7 @@ test_that("format(style = 'latex'): a tabular, -> as $\\to$, special characters 
   expect_match(tex, "gamma (x1 $\\to$ y)", fixed = TRUE)
   expect_match(tex, "SD (Intercept) | id & ", fixed = TRUE)
   expect_match(tex, "95\\% interval", fixed = TRUE)
-  expect_snapshot(cat(format(et, "latex", digits = 2)))
+  expect_snapshot(cat(maskNumbers(format(et, "latex", digits = 2))))
 })
 
 test_that("format(style = 'array'): the table as display math, cells in \\text{}", {
@@ -1021,7 +1122,7 @@ test_that("format(style = 'array'): the table as display math, cells in \\text{}
   expect_true(any(grepl("\\text{gamma (x1 $\\to$ y)}", arr, fixed = TRUE)))
   rows <- arr[5:(4 + nrow(et))]
   expect_true(all(grepl("\\\\$", rows)))
-  expect_snapshot(cat(format(et, "array", digits = 2)))
+  expect_snapshot(cat(maskNumbers(format(et, "array", digits = 2))))
 })
 
 test_that("format() / print() of an empty estimates table", {
@@ -1223,4 +1324,27 @@ test_that("predict() with list newdata of different columns keeps the summaries 
   expect_equal(p$pt, c(2, NA))                      # NA where a response's newdata lacks the column
   expect_equal(as.character(p$grp), c("b", NA))
   expectOrderedStats(p)
+})
+
+test_that("varianceComponents(): `blockId` keys the rows of a block, `block` is its display label (D4)", {
+  vc <- varianceComponents(fxModel("beta"))$table
+  expect_true("blockId" %in% names(vc))
+  expect_equal(unique(vc$blockId[vc$block != "residual"]), 1L)
+  expect_true(all(is.na(vc$blockId[vc$block == "residual"])))
+  expect_equal(unique(vc$block[vc$blockId %in% 1L]), blockLabel("x1", "id", c("(Intercept)", "t")))
+  expect_output(print(varianceComponents(fxModel("beta"))), "block")
+  expect_false(grepl("blockId", paste(capture.output(print(varianceComponents(fxModel("beta")))), collapse = "")))
+})
+
+test_that("latentHyperRows(): the only builder of INLA's latent row names (D1)", {
+  m <- fxModel("multi")
+  k <- latentHyperRows(m$inla)
+  expect_true(all(k$.inla %in% rownames(m$fit$summary.hyperpar)))
+  expect_setequal(unique(k$short), c("prec", "rho", "beta"))
+  prec <- k[k$short == "prec", ]
+  expect_true(all(prec$internal %in% names(m$fit$internal.marginals.hyperpar)))
+  expect_true(all(is.na(k$block[k$short == "beta"])) && all(!is.na(k$block[k$short != "beta"])))
+  b <- blockHyperRows(k, "x1", 1L)
+  expect_equal(b$effect[b$short == "prec"], m$inla$random$x1[[1]]$effects)
+  expect_equal(b$effect2[b$short == "rho"], "t")
 })

@@ -104,8 +104,11 @@ outcome data; the outcome uses $\gamma u$.
 - **Random effects** as in lme4: `(1 + t | id)` correlated, `(1 + t || id)` uncorrelated;
   `re(1 + t | id, prior = ...)` sets the prior of the block.
 - **Associations**: `scaled(x1)` in an outcome formula links it to the marker `x1`;
-  `scaled(x1, prior = normalCoef(0, 1))` sets the prior of $\gamma$. An outcome may name
-  several markers.
+  `scaled(x1, prior = normalCoef(0, 1))` sets the prior of $\gamma$, `scaled(x1, coef = 1)`
+  fixes it. An outcome may name several markers.
+- **Latent processes**: `latent(eta) ~ 1 + t + (1 | id) + scaled(x1) + scaled(x2)` is an
+  unobserved process made of markers (and its own fixed and random effects); outcomes link to
+  it with `scaled(eta)`. Options: `family = list(eta = latentSpec(...))`.
 - **Family inputs** after the response: `k | trials(n) ~ ...` (binomial),
   `cnt | exposure(pt) ~ ...` (counts), `time | event(status) ~ ...` (survival),
   `x | weights(w) ~ ...` (observation weights).
@@ -138,6 +141,7 @@ The scale of a random-effect prior can be taken from an lme4 fit of the same for
 | `fixedEffects()`, `associations()`, `hyperparameters()`, `coef()` | posterior summaries |
 | `randomEffects()`, `varianceComponents()` | subject effects; SDs, correlations and covariance matrices |
 | `fittedValues()`, `residuals()`, `modelFit()` | fitted means and residuals; DIC, WAIC, log score |
+| `survivalCurves()` | Kaplan-Meier and model survival curves of a survival outcome (also in `plot()`) |
 | `predict(m, newdata)` | posterior of the mean for new subjects or new times; `plot()` of the result |
 | `plot()`, `plotResiduals()`, `plotRandomEffects()`, `plotVarianceComponents()`, `plotFixedEffects()`, `plotAssociations()` | data and fit, diagnostics, posteriors |
 | `plotModel()`, `latexEquation()` | diagram and equations of the model |

@@ -5,26 +5,29 @@ timeData <- function() {
   d$age <- 50 + as.numeric(factor(d$id))            # a second numeric covariate
   d
 }
+# the model of these tests (age in both formulae, t only in the marker's), unfitted, with
+# further jsm() arguments (time = , naming = , ...)
+timeModel <- function(d = timeData(), ...)
+  jsm(list(y ~ age + scaled(x1), x1 ~ t + age + (1 | id)), data = d, family = list(y = betaFamily()),
+      fit = FALSE, ...)
 
 test_that("jsm(time = ): stored, printed and used by the plots", {
   d <- timeData()
-  m <- jsm(list(y ~ age + scaled(x1), x1 ~ t + age + (1 | id)), data = d,
-           family = list(y = betaFamily()), time = "t", fit = FALSE)
+  m <- timeModel(d, time = "t")
   tv <- timeVariable(m)
   expect_equal(as.character(tv), "t")
   expect_equal(attr(tv, "source"), "given")
   expect_output(print(m), "Time variable: t\n")
-  expect_identical(plotLinesData(m, NULL, NULL, NULL, 5, NULL, TRUE)$time, "t")
+  expect_identical(linesData(m, n = 5)$time, "t")
   # the plot's own `time` still overrides the model's
-  expect_identical(plotLinesData(m, NULL, "age", NULL, 5, NULL, TRUE)$time, "age")
+  expect_identical(linesData(m, time = "age", n = 5)$time, "age")
 })
 
 test_that("jsm() without time: the numeric covariate of most formulae, with a message when ambiguous", {
   d <- timeData()
   # age is in both formulae, t only in one: age wins, and the message names t
   expect_message(
-    m <- jsm(list(y ~ age + scaled(x1), x1 ~ t + age + (1 | id)), data = d,
-             family = list(y = betaFamily()), fit = FALSE),
+    m <- timeModel(d),
     "Time variable: 'age'.*other candidates: t.*jsm\\(time = \\)")
   expect_equal(as.character(timeVariable(m)), "age")
   expect_equal(attr(timeVariable(m), "source"), "detected")
@@ -42,7 +45,7 @@ test_that("jsm() without time: the numeric covariate of most formulae, with a me
   expect_true(is.na(timeVariable(m4)))
   expect_equal(attr(timeVariable(m4), "source"), "none")
   expect_false(any(grepl("Time variable", capture.output(print(m4)))))
-  expect_error(plotLinesData(m4, NULL, NULL, NULL, 5, NULL, TRUE), "No numeric covariate")
+  expect_error(linesData(m4, n = 5), "No numeric covariate")
 })
 
 test_that("jsm(time = ): clear errors", {
@@ -70,4 +73,14 @@ test_that("timeVariable(): models built before E19 detect it", {
 test_that("timeVariable(): a survival model takes the link variable of the outcome", {
   m <- fxModel("surv", fit = FALSE)
   expect_equal(as.character(timeVariable(m)), "t")
+})
+
+test_that("timeCandidates(): a numeric grouping variable is not a time candidate (B27)", {
+  d <- fxData()$long
+  d$id <- as.integer(factor(d$id))
+  expect_message(m <- jsm(list(y ~ t + scaled(x1)), list(x1 ~ t + (1 | id)), data = d,
+                          family = list(y = betaFamily()), fit = FALSE), NA)
+  expect_equal(m$time$candidates, "t")
+  expect_error(jsm(list(y ~ t + scaled(x1)), list(x1 ~ t + (1 | id)), data = d, time = "id", fit = FALSE),
+               "must be a numeric variable")
 })

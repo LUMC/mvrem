@@ -4,8 +4,7 @@
 #' longitudinal responses on the left, the outcomes on the right) with its
 #' response, family (and link, `trials()` / `exposure()` / `event()` / `weights()` input) and
 #' random-effect blocks, and one arrow per association from a longitudinal
-#' response to an outcome, labelled with its parameter `gamma`. A longitudinal
-#' response named in no `scaled()` term has no arrow.
+#' response to an outcome, labelled with its parameter `gamma`.
 #'
 #' For a fitted model the arrows carry the posterior mean and the 95% credible
 #' interval of `gamma`, and each box adds the posterior means of the standard
@@ -41,8 +40,8 @@ plotModel.mvremModel <- function(x, detail = c("model", "inla"), fitted = TRUE, 
   detail <- match.arg(detail)
   showFit <- isTRUE(fitted) && !is.null(x$fit)
   vc <- if (showFit) varianceComponentsOrNull(x, "the model diagram")
-  nodes <- diagramNodes(x$forms, vc)
-  links <- diagramLinks(x$forms$out)
+  nodes <- diagramNodes(x$forms, vc, x$inla$naming)
+  links <- diagramLinks(c(x$forms$out, latentParts(x$forms)))   # E38: latent links too
   est <- if (showFit) associations(x)
 
   op <- graphics::par(mar = c(0.5, 0.5, 0.5, 0.5), xaxs = "i", yaxs = "i")
@@ -64,6 +63,7 @@ plotModel.mvremModel <- function(x, detail = c("model", "inla"), fitted = TRUE, 
 # character height x `lineHeight`); `user` = units of the plot window, 0..1 in x and y.
 diagramStyle <- list(
   col = "#003c7b", fillLong = "#dcecf7", fillOut = "#fdebd2",   # text and borders, box fills
+  fillLatent = "#e3f1e0",  # box fill of a latent equation (middle column, E38)
   lineHeight = 1.25,       # line spacing (character heights)
   boxPadIn = 0.2,          # box width beyond its widest line (inches)
   columnGapIn = c(model = 1.5, inla = 2),   # space between the two columns of boxes (inches)
@@ -90,7 +90,7 @@ diagramStyle <- list(
 # The boxes of the diagram: one per equation, longitudinal (side "L") before outcomes ("R");
 # lines: response, family / link / inputs, random-effect blocks; with variance components
 # `vc` (varianceComponents() of a fit) also their estimates (sdLines()).
-diagramNodes <- function(forms, vc = NULL) {
+diagramNodes <- function(forms, vc = NULL, naming = namingScheme()) {
   boxLines <- function(p) {
     fam <- p$family
     link <- fam$link
@@ -99,21 +99,29 @@ diagramNodes <- function(forms, vc = NULL) {
     re <- vapply(p$re, function(b) paste0("(", deparse1(b$term), ")"), "")
     c(p$lhs, paste0(fl, if (length(aux)) paste0("; ", paste(aux, collapse = ", "))),
       if (length(re)) paste("re:", re) else "no random effects",
-      sdLines(vc, p$response))
+      sdLines(vc, p$response, naming))
+  }
+  latentLines <- function(p) {
+    re <- vapply(p$re, function(b) paste0("(", deparse1(b$term), ")"), "")
+    c(paste0("latent(", p$response, ")"), "no observations",
+      if (length(re)) paste("re:", re) else "no random effects",
+      sdLines(vc, p$response, naming))
   }
   c(lapply(forms$long, function(p) list(id = p$response, lines = boxLines(p), side = "L")),
+    lapply(latentParts(forms), function(p) list(id = p$response, lines = latentLines(p), side = "M")),
     lapply(forms$out, function(p) list(id = p$response, lines = boxLines(p), side = "R")))
 }
 
 # The arrows: one row per scaled() term (from = longitudinal, to = outcome); `prior` marks a
 # gamma with a prior or other parameters given in scaled().
 diagramLinks <- function(outs) {
-  do.call(rbind, c(list(data.frame(from = character(), to = character(),
-                                   prior = logical(), stringsAsFactors = FALSE)),
-    lapply(outs, function(o) if (length(o$scaled))
-      data.frame(from = scaledTargets(o), to = o$response,
-                 prior = vapply(o$scaled, function(s) !is.null(s$prior) || length(s$params) > 0L, NA),
-                 stringsAsFactors = FALSE))))
+  rows <- lapply(Filter(function(o) length(o$scaled) > 0L, outs), function(o)
+    data.frame(from = scaledTargets(o), to = o$response,
+               prior = vapply(o$scaled, function(s) !is.null(s$prior) || length(s$params) > 0L, NA),
+               coef = vapply(o$scaled, function(s) if (is.null(s$coef)) NA_real_ else s$coef, 0),
+               stringsAsFactors = FALSE))
+  bindRows(rows, data.frame(from = character(), to = character(), prior = logical(), coef = numeric(),
+                            stringsAsFactors = FALSE))
 }
 
 # The geometry of the diagram on the current device (after plot.new()): the text size `cex`
@@ -126,10 +134,11 @@ diagramGeometry <- function(nodes, detail, cex) {
   lineH <- function(cex) graphics::par("cin")[2L] * cex * st$lineHeight
   colLines <- function(side) sum(vapply(Filter(function(n) n$side == side, nodes),
                                        function(n) length(n$lines) + st$boxLinesFit, 0))
+  nCol <- if (any(vapply(nodes, function(n) n$side == "M", NA))) 3L else 2L   # E38: latent column
   repeat {
     wIn <- max(unlist(lapply(nodes, function(n) graphics::strwidth(n$lines, "inches", cex)))) + st$boxPadIn
-    okW <- 2 * wIn + st$columnGapIn[[detail]] <= pin[1L]
-    okH <- max(colLines("L"), colLines("R")) * lineH(cex) <= pin[2L]
+    okW <- nCol * wIn + (nCol - 1L) * st$columnGapIn[[detail]] <= pin[1L]
+    okH <- max(colLines("L"), colLines("M"), colLines("R")) * lineH(cex) <= pin[2L]
     if ((okW && okH) || cex < st$minCex) break
     cex <- cex * st$shrink
   }
@@ -138,7 +147,9 @@ diagramGeometry <- function(nodes, detail, cex) {
   wx <- wIn * xu
   xL <- wx / 2; xR <- 1 - wx / 2                 # box centres
   list(cex = cex, lh = lh, yu = yu, wx = wx, xL = xL, xR = xR, x0 = xL + wx / 2, x1 = xR - wx / 2,
-       pos = c(stackBoxes(nodes, "L", lh, yu), stackBoxes(nodes, "R", lh, yu)))
+       xc = c(L = xL, M = 0.5, R = xR),
+       side = stats::setNames(vapply(nodes, `[[`, "", "side"), vapply(nodes, `[[`, "", "id")),
+       pos = c(stackBoxes(nodes, "L", lh, yu), stackBoxes(nodes, "M", lh, yu), stackBoxes(nodes, "R", lh, yu)))
 }
 
 # The boxes of one side, stacked and centred vertically: per id c(y = centre, h = height).
@@ -154,14 +165,17 @@ stackBoxes <- function(nodes, side, lh, yu) {
   stats::setNames(Map(function(yy, hh) c(y = yy, h = hh), y, h), vapply(ns, `[[`, "", "id"))
 }
 
+# The boxes of the diagram: one per node at its computed position, the longitudinal ones on
+# the left, with the node's text lines (response, family, RE blocks, fitted SDs).
 drawDiagramBoxes <- function(nodes, g) {
   st <- diagramStyle
   for (id in names(g$pos)) {
     n <- Filter(function(z) z$id == id, nodes)[[1L]]
     p <- g$pos[[id]]
-    xc <- if (n$side == "L") g$xL else g$xR
+    xc <- g$xc[[n$side]]
+    fill <- switch(n$side, L = st$fillLong, M = st$fillLatent, R = st$fillOut)
     graphics::rect(xc - g$wx / 2, p["y"] - p["h"] / 2, xc + g$wx / 2, p["y"] + p["h"] / 2,
-                   col = if (n$side == "L") st$fillLong else st$fillOut, border = st$col, lwd = st$boxLwd)
+                   col = fill, border = st$col, lwd = st$boxLwd)
     ys <- p["y"] + p["h"] / 2 - (seq_along(n$lines) - 0.5 + st$textTopLines) * g$lh * g$yu
     graphics::text(xc, ys, n$lines, cex = g$cex, col = st$col, font = c(2L, rep(1L, length(n$lines) - 1L)))
   }
@@ -186,8 +200,10 @@ drawDiagramArrows <- function(links, g, detail) {
   yFrom <- arrowEnds(links, g$pos, "from")
   yTo <- arrowEnds(links, g$pos, "to")
   a <- st$arrow[[detail]]
-  x0 <- g$x0; x1 <- g$x1
   lapply(seq_len(nrow(links)), function(i) {
+    # from the right edge of the source's column to the left edge of the target's
+    x0 <- g$xc[[g$side[[links$from[i]]]]] + g$wx / 2
+    x1 <- g$xc[[g$side[[links$to[i]]]]] - g$wx / 2
     if (detail == "model") {
       graphics::arrows(x0, yFrom[i], x1, yTo[i], length = a[["length"]], col = st$col, lwd = a[["lwd"]])
       return(c(x0, yFrom[i], x1, yTo[i]))
@@ -198,7 +214,7 @@ drawDiagramArrows <- function(links, g, detail) {
     graphics::arrows(xm + uw, ym, x1, yTo[i], length = a[["length"]], col = st$col, lwd = a[["lwd"]])
     graphics::rect(xm - uw, ym - g$lh * g$yu * st$uHalfHeightLines, xm + uw, ym + g$lh * g$yu * st$uHalfHeightLines,
                    col = "white", border = st$col)
-    graphics::text(xm, ym, bquote(u^(.(paste0(links$from[i], " -> ", links$to[i])))),
+    graphics::text(xm, ym, bquote(u^(.(linkLabel(links$from[i], links$to[i])))),
                    cex = g$cex * st$uCex, col = st$col)
     c(xm + uw, ym, x1, yTo[i])
   })
@@ -207,6 +223,9 @@ drawDiagramArrows <- function(links, g, detail) {
 # The label of an arrow (one row of diagramLinks()): the estimate of gamma with its 95%
 # interval when `est` (associations()) has it, else the symbol (`*`: prior / parameters set).
 gammaLabel <- function(link, est) {
+  # scaled(x, coef = c): fixed, no estimate (E38)
+  if (!is.null(link$coef) && !is.na(link$coef))
+    return(bquote(gamma == .(format(link$coef)) ~ "(fixed)"))
   symbol <- if (link$prior) quote(gamma * "*") else quote(gamma)
   if (is.null(est)) return(symbol)
   e <- est[est$outcome == link$to & est$longitudinal == link$from, ]
@@ -261,7 +280,7 @@ drawInlaHeader <- function(g) {
 # E6: the estimates of the variance components of response `r` in its box (posterior means,
 # 2 significant digits): per random-effect block "SD | id: (Intercept) 0.46, t 0.18; cor 0.57",
 # then "residual SD 0.22". Empty without `vc`.
-sdLines <- function(vc, r) {
+sdLines <- function(vc, r, naming) {
   if (is.null(vc)) return(character())
   t <- vc$table[vc$table$response == r, , drop = FALSE]
   num <- function(v) formatC(signif(v, 2), digits = 2, format = "fg", flag = "#")
@@ -272,9 +291,10 @@ sdLines <- function(vc, r) {
     co <- tb[tb$parameter == "correlation", , drop = FALSE]
     out <- c(out, paste0(
       if (vc$scale == "sd") "SD" else "variance", " | ", sd$group[1L], ": ",
-      paste(sd$effect, num(sd$mean), collapse = ", "),
+      paste(effectLabel(sd$effect, naming), num(sd$mean), collapse = ", "),
       if (nrow(co)) paste0("; cor ", paste(
-        if (nrow(co) > 1L) paste0(co$effect, "~", co$effect2, " ") else "", num(co$mean), sep = "", collapse = ", "))))
+        if (nrow(co) > 1L) paste0(effectLabel(co$effect, naming), "~", effectLabel(co$effect2, naming), " ") else "",
+        num(co$mean), sep = "", collapse = ", "))))
   }
   res <- t[t$block == "residual", , drop = FALSE]
   if (nrow(res)) out <- c(out, paste("residual SD", num(res$mean[1L])))

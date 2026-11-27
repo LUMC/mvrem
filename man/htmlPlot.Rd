@@ -9,8 +9,8 @@ htmlPlot(
   ncol = 2L,
   legend = NULL,
   linked = TRUE,
-  search = "subject id",
-  colorBy = NULL
+  search = "subject",
+  groupBy = NULL
 )
 }
 \arguments{
@@ -23,14 +23,20 @@ the plotting functions).}
 
 \item{linked}{If \code{TRUE}, ids are shared by the panels (linked highlighting).}
 
-\item{search}{Label of the search box (\code{NULL}: none).}
+\item{search}{Label of the search box (\code{NULL}: none). The box highlights the
+elements whose id contains the typed text, or whose subject-level \code{groupBy}
+value does (a variable constant within every subject), and lists them in a
+dropdown (groups first); a pick (click, or arrow keys + Enter) highlights
+exactly that subject or group.}
+
+\item{groupBy}{The colour / shape grouping of the points (\code{groupSpec()}), or \code{NULL}.}
 }
 \value{
 An \code{htmlwidget} (class \code{mvremPlot}).
 }
 \description{
-The plotting functions (\code{\link[=plot.mvremModel]{plot.mvremModel()}}, \code{\link[=plotResiduals]{plotResiduals()}}, \code{\link[=plotRandomEffects]{plotRandomEffects()}},
-\code{\link[=plotVarianceComponents]{plotVarianceComponents()}}, \code{\link[=plotFixedEffects]{plotFixedEffects()}}, \code{\link[=plotAssociations]{plotAssociations()}}) return
+The plotting functions (\code{\link[=plot.mvremModel]{plot.mvremModel()}}, \code{\link[=plotResiduals]{plotResiduals()}}, \code{\link[=plot.mvremPredictions]{plot.mvremPredictions()}},
+\code{\link[=plotRandomEffects]{plotRandomEffects()}}, \code{\link[=plotVarianceComponents]{plotVarianceComponents()}}, \code{\link[=plotFixedEffects]{plotFixedEffects()}}, \code{\link[=plotAssociations]{plotAssociations()}}) return
 an interactive HTML widget with \code{interactive = TRUE}. The widget is
 self-contained (own JavaScript, no external libraries or network access), so it works
 in the RStudio viewer, in R Markdown / Quarto HTML output (also with embedded

@@ -50,7 +50,8 @@ one association per \code{scaled()} term of the formula (in the order written;
 covariates of the linked longitudinal formulae not already used by the
 outcome formula (the outcome data must contain them). Also returned:
 \code{variables}, a data frame with one row per variable and role, with columns
-\code{variable}, \code{role} (\code{"response"}, \code{"covariate"} or \code{"group"}), \code{part} and
+\code{variable}, \code{role} (\code{"response"}, \code{"covariate"}, \code{"group"} or \code{"aux"}, the variables of
+\code{trials()} / \code{exposure()} / \code{event()} / \code{weights()}), \code{part} and
 \code{formula} (response of the formula it occurs in), and \code{order}, the
 response names in the order the formulae were passed (one list: as
 listed; pair style: the outcomes, then the longitudinal responses).
@@ -76,4 +77,11 @@ without one is longitudinal and must be the target of some \code{scaled()} term
 give an outcome without a \code{scaled()} term. Within each part the formulae keep
 the order given; \code{order} records the order of all formulae as passed, which
 every result of a model follows (see \code{\link[=modelResponses]{modelResponses()}}).
+
+A formula with \code{latent(name)} on the left-hand side is a latent equation (in
+either style): an unobserved process with fixed and random effects and \code{scaled()}
+terms naming longitudinal responses, to which outcomes link with \code{scaled(name)};
+its options are given as \code{family = list(name = latentSpec(...))} (see
+\code{\link[=latentSpec]{latentSpec()}}). \code{scaled(x, coef = 1)} fixes a coefficient (e.g. to fix the scale
+of a latent process).
 }

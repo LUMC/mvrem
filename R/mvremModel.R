@@ -5,8 +5,11 @@
 #' can provide the same interface. No knowledge of INLA is needed to use them.
 #'
 #' An `mvremModel` is a list with the components `call`, `forms` (result of
-#' [collectFormulas()]), `data` (result of [prepareData()]), `dataSummary`
-#' ([summarizeData()]), `inla` (result of [buildInlaFormula()]), `options` (how
+#' [collectFormulas()]), `data` (result of [prepareData()]), `display` (categorical
+#' columns of the data that no formula uses, kept for colouring / shaping the plots only),
+#' `dataSummary`
+#' ([summarizeData()]), `inla` (result of [buildInlaFormula()]), `time` (the time variable:
+#' `variable`, `source`, `candidates`; see [timeVariable()]), `options` (how
 #' INLA is run), `fit` (the INLA result, `NULL` if not fitted) and `inlaError`.
 #' Prefer the functions below to `$`.
 #'
@@ -39,8 +42,10 @@
 #'   response and term.
 #' * `hyperparameters()`: posterior summaries of the hyperparameters (residual
 #'   and family parameters, precisions and correlations of random effects,
-#'   association coefficients) with readable names. INLA's parametrisation is
-#'   used: precisions, not standard deviations.
+#'   association coefficients): `response`, `parameter` (a readable name), `type` (`"family"`,
+#'   `"random"`, `"association"`, or `NA` for a row mvrem does not recognise) and the posterior
+#'   `mean`, `sd`, `q0.025`, `q0.5`, `q0.975`, `mode`; rows grouped by response in the order the
+#'   formulae were passed. INLA's parametrisation is used: precisions, not standard deviations.
 #' * `associations()`: the association coefficients \eqn{\gamma} of the
 #'   `scaled()` terms, one row per outcome and longitudinal response.
 #' * `refit()`: the model fitted again (see [jsm()] for the options).
@@ -68,14 +73,39 @@ orderResponses <- function(x, r) {
   all[all %in% r]
 }
 
+# The responses selected by a `response` argument (NULL = all), checked, in the order of
+# the model (the order in which the formulae were passed), whatever the order given.
+# `observed = TRUE`: only responses with data (a latent equation, E38, has none): NULL selects
+# the observed responses, a latent one named explicitly is an error.
+selectResponses <- function(x, response, observed = FALSE) {
+  allResp <- modelResponses(x)
+  latent <- names(latentParts(if (inherits(x, "mvremModel")) x$forms else x))
+  if (observed) allResp <- setdiff(allResp, latent)
+  if (is.null(response)) return(allResp)
+  if (observed && any(response %in% latent))
+    stop("'", intersect(response, latent)[1L], "' is a latent equation: it has no observations.",
+         call. = FALSE)
+  bad <- setdiff(response, allResp)
+  if (length(bad))
+    stop("Unknown response(s): ", paste(bad, collapse = ", "), ". Responses of the model: ",
+         paste(allResp, collapse = ", "), ".", call. = FALSE)
+  orderResponses(x, response)
+}
+
 # The rows of a result table grouped by response in the order of the model (stable: the
 # order within a response is kept; rows of no response last).
-orderByResponse <- function(x, df, col = "response") {
+orderByResponse <- function(x, df, col = "response", first = NULL, then = NULL) {
   if (!NROW(df)) return(df)
-  k <- order(match(df[[col]], modelResponses(x)), seq_len(nrow(df)), na.last = TRUE)
-  out <- df[k, , drop = FALSE]
+  out <- df[responseOrder(x, df, col, first, then), , drop = FALSE]
   rownames(out) <- NULL
   out
+}
+# The permutation behind orderByResponse(): a stable sort by `first` (a key sorted before the
+# response, e.g. residual rows last), the response in the model's order (unknown responses last)
+# and `then` (a key within a response).
+responseOrder <- function(x, df, col = "response", first = NULL, then = NULL) {
+  keys <- list(first, match(df[[col]], modelResponses(x)), then, seq_len(nrow(df)))
+  do.call(order, c(Filter(Negate(is.null), keys), list(na.last = TRUE)))
 }
 
 #' @rdname mvremModel
@@ -107,10 +137,11 @@ inlaSpec.mvremModel <- function(x, ...) x$inla
 inlaData <- function(x, ...) UseMethod("inlaData")
 #' @rdname mvremModel
 #' @export
-inlaData.mvremModel <- function(x, n = Inf, ...) stackRows(x$inla, n)
+inlaData.mvremModel <- function(x, n = Inf, ...) inlaData.default(x$inla, n)
 # a buildInlaFormula() result
 #' @export
 inlaData.default <- function(x, n = Inf, ...) {
+  if (!isNumber(n) || n < 0) stop("`n` must be a single number >= 0.", call. = FALSE)
   if (!is.list(x) || is.null(x$stacks))
     stop("`x` must be a model or the result of buildInlaFormula().", call. = FALSE)
   stackRows(x, n)
@@ -151,6 +182,13 @@ associations.mvremModel <- function(x, ...) {
   h <- associationRows(x)
   out <- cbind(outcome = h$response, longitudinal = h$link,
                h[setdiff(names(h), c("response", "parameter", "type", hyperInternalColumns))])
+  # E38: with latent equations, which kind of link each row is
+  latent <- names(latentParts(x$forms))
+  if (length(latent) && nrow(out))
+    out <- cbind(out[1:2], level = ifelse(out$outcome %in% latent, "marker -> latent",
+                                          ifelse(out$longitudinal %in% latent, "latent -> outcome",
+                                                 "marker -> outcome")),
+                 out[-(1:2)])
   rownames(out) <- NULL
   out
 }
@@ -174,6 +212,8 @@ refit.mvremModel <- function(x, ..., verbose = x$options$verbose, threads = x$op
   dots <- list(...)
   if (length(dots)) stop("Unknown argument(s) to refit(): ", paste(names(dots), collapse = ", "),
                          call. = FALSE)
+  checkFlag(verbose, "verbose")
+  checkInlaOptions(inlaOptions, threads)
   x$options <- list(verbose = verbose, threads = threads, inlaOptions = inlaOptions)
   res <- runInla(x)
   if (inherits(res, "error")) {
@@ -220,6 +260,34 @@ coef.mvremModel <- function(object, ...) {
 # Argument checks: one non-missing string / number.
 isString <- function(x) is.character(x) && length(x) == 1L && !is.na(x)
 isNumber <- function(x) is.numeric(x) && length(x) == 1L && !is.na(x)
+isFlag <- function(x) is.logical(x) && length(x) == 1L && !is.na(x)
+# rbind() of a list of data frames (rows collected in a loop), or `template` (the empty data
+# frame with the typed columns) when there are none; row names dropped.
+bindRows <- function(rows, template) {
+  out <- if (length(rows)) do.call(rbind, rows) else template
+  rownames(out) <- NULL
+  out
+}
+# A list whose elements all have non-empty names (an empty list passes); `unique`: no repeats.
+isNamedList <- function(x, unique = FALSE) {
+  if (!is.list(x)) return(FALSE)
+  nms <- names(x)
+  if (!length(x)) return(TRUE)
+  !is.null(nms) && !any(nms == "") && (!unique || !anyDuplicated(nms))
+}
+
+# `arg` must be one whole number >= min (a count such as `n`, `ncol`, `nsamples`); NULL
+# passes when `nullOk`. Returns the integer value invisibly.
+checkCount <- function(x, arg, min = 0L, nullOk = FALSE) {
+  if (is.null(x) && nullOk) return(invisible(NULL))
+  if (!isNumber(x) || x != round(x) || x < min)
+    stop("`", arg, "` must be a single whole number >= ", min, ".", call. = FALSE)
+  invisible(as.integer(x))
+}
+checkFlag <- function(x, arg) {
+  if (!isFlag(x)) stop("`", arg, "` must be TRUE or FALSE.", call. = FALSE)
+  invisible(x)
+}
 
 # The outcome and longitudinal parts of a two-part list (`forms`, `data`, a model's
 # `x$forms` / `x$data`) as one list named by response: outcomes first, then the markers.
@@ -236,11 +304,20 @@ print.mvremModel <- function(x, ...) {
   famText <- function(p) paste0(p$response, " (", p$family$family, ")")
   cat("Outcomes:      ", paste(vapply(x$forms$out, famText, ""), collapse = ", "), "\n", sep = "")
   cat("Longitudinal:  ", paste(vapply(x$forms$long, famText, ""), collapse = ", "), "\n", sep = "")
-  links <- vapply(x$forms$out, function(o) {
+  latent <- latentParts(x$forms)
+  if (length(latent))
+    cat("Latent:        ", paste(names(latent), collapse = ", "), " (no observations)\n", sep = "")
+  links <- vapply(c(x$forms$out, latent), function(o) {
     t <- scaledTargets(o)
     if (length(t)) paste0(o$response, " <- ", paste(t, collapse = ", ")) else NA_character_
   }, "")
   cat("Associations:  ", paste(links[!is.na(links)], collapse = "; "), "\n", sep = "")
+  # Q3 (E38): the scale and sign of a latent process are fixed only by the priors unless a
+  # coefficient of its links is fixed
+  free <- names(latent)[vapply(names(latent), function(L) !latentScaleFixed(x$forms, L), NA)]
+  if (length(free))
+    cat("               (scale and sign of ", paste(free, collapse = ", "), " set only by the priors; ",
+        "fix one with scaled(", free[1L], ", coef = 1))\n", sep = "")
   tv <- timeVariable(x)
   if (!is.na(tv))
     cat("Time variable: ", tv, if (identical(attr(tv, "source"), "detected"))

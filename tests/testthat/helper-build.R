@@ -30,3 +30,22 @@ termOf <- function(inl, index) {
 }
 
 termHyper <- function(inl, index) eval(as.list(termOf(inl, index))$hyper)
+
+# fxSmallData() with missing values: in the long data the response of row 2 (S1, t = 1) and the
+# covariate t of row 5 (S2, t = 1) are missing and subject S4 is absent; in the outcome data the
+# link variable t of row 7 (S3, t = 0) is missing.
+fxMissingData <- function() {
+  d <- fxSmallData()
+  dLong <- d
+  dLong$x[2] <- NA
+  dLong$t[5] <- NA
+  dLong <- dLong[dLong$id != "S4", ]
+  dOut <- d
+  dOut$t[7] <- NA
+  list(long = dLong, out = dOut)
+}
+
+# Formulae with a trials() and an exposure() outcome on the small data (binomial k, Poisson cnt).
+countForms <- function()
+  collectFormulas(list(k | trials(n) ~ t + scaled(x), cnt | exposure(pt) ~ 1 + scaled(x)),
+                  list(x ~ t + (1 | id)), family = list(k = "binomial", cnt = "poisson"))

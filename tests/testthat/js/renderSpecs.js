@@ -55,17 +55,50 @@ function run(file) {
     return !!kindCss && kindCss.textContent.indexOf(".mvp.off-" + e.kind + " .kind-" + e.kind + "{display:none}") >= 0;
   });
 
-  // search box: the first id matches at least itself; a match dims the others
-  var inp = el.querySelector("input"), count = inp ? inp.parentNode.children[1] : null;
-  var id = firstId(spec);
+  // search box: the first id matches at least itself; a match dims the others; the dropdown
+  // lists the matches, a click on an entry (or Enter) highlights exactly that entry
+  var inp = el.querySelector("input"), count = el.querySelector("span.scount");
+  var dd = el.querySelector("div.sdd"), id = firstId(spec);
+  function shown(n) { return n && n.style.display !== "none"; }
+  function nMatches() { return parseInt(count.textContent, 10); }
   if (inp && id !== null) {
     inp.value = id;
     inp.dispatch("input");
-    res.searchMatches = parseInt(count.textContent, 10);
+    res.searchMatches = nMatches();
     res.dimAfterSearch = root.classList.contains("dim");
+    res.dropdownShown = shown(dd);
+    res.dropdownItems = dd.children.length;
+    res.dropdownFirst = dd.children.length ? dd.children[0].textContent : null;
+    dd.children[0].dispatch("mousedown", {});
+    res.pickedMatches = nMatches();
+    res.pickedValue = inp.value;
+    res.dropdownClosedAfterPick = !shown(dd);
+    inp.dispatch("input");                         // keyboard: down + Enter picks the first entry
+    inp.dispatch("keydown", { key: "ArrowDown" });
+    res.activeAfterDown = dd.children[0].classList.contains("act");
+    inp.dispatch("keydown", { key: "Enter" });
+    res.enterMatches = nMatches();
+    inp.dispatch("input");
+    inp.dispatch("keydown", { key: "Escape" });
+    res.dropdownClosedByEscape = !shown(dd);
+    res.placeholder = inp.placeholder;
+    // a value of a subject-level groupBy variable: one group entry per matching level
+    var gb = spec.groupBy;
+    if (gb && [].concat(gb.vars || []).length) {
+      res.groupSearch = [].concat(gb.vars).map(function (v) {
+        var lv = String([].concat(gb.levels[v])[0]);
+        inp.value = lv; inp.dispatch("input");
+        var grp = el.querySelectorAll("div.grp").map(function (g) { return g.textContent; });
+        var out = { variable: v, level: lv, entries: grp, matches: nMatches() };
+        var mine = el.querySelectorAll("div.grp").filter(function (g) { return g.textContent.indexOf(v + " = " + lv) === 0; })[0];
+        if (mine) { mine.dispatch("click", {}); out.picked = nMatches(); }
+        return out;
+      });
+    }
     inp.value = "";
     inp.dispatch("input");
     res.dimAfterClear = root.classList.contains("dim");
+    res.dropdownHiddenWhenEmpty = !shown(dd);
   }
 
   // legend: a click switches the entry's kind off (class off-<kind> on the root), a second on
@@ -77,21 +110,57 @@ function run(file) {
     return off && !root.classList.contains("off-" + kinds[i]);
   }).every(Boolean);
 
-  // colorBy: the dropdown lists "gray" + the variables; choosing the first colours points with
-  // the palette, choosing "gray" restores the default colours
-  var sel = el.querySelector("select");
-  if (sel && spec.colorBy) {
-    var pal = [].concat(spec.colorBy.palette), fills = function () {
+  // colorBy / shapeBy (spec.groupBy): the first dropdown lists "gray" + the variables; choosing
+  // the first colours points with the palette, a click on a level of its legend hides that subset
+  // (some series get display none), a second click shows it, "gray" restores the default colours.
+  // The second dropdown (shape) turns points into symbols (path.sym) and back.
+  var sels = el.querySelectorAll("select"), sel = sels[0], gb = spec.groupBy;
+  if (sel && gb) {
+    var pal = [].concat(gb.palette), fills = function () {
       return el.querySelectorAll("circle").map(function (c) { return c.getAttribute("fill"); });
+    };
+    var hiddenSeries = function () {
+      return el.querySelectorAll("g.el").filter(function (g) { return g.style.display === "none"; }).length;
     };
     var before = fills();
     res.colorOptions = sel.children.length;
-    sel.value = [].concat(spec.colorBy.vars)[0]; sel.dispatch("change");
+    sel.value = [].concat(gb.vars)[0]; sel.dispatch("change");
     res.colored = fills().some(function (f) { return pal.indexOf(f) >= 0; });
-    var levBox = el.querySelector("span.clev");
+    // opacity of the coloured lines and points per element kind (`fade`: observations behind predictions)
+    res.colorOpacity = {};
+    el.querySelectorAll("g.el").forEach(function (g) {
+      var k = (g.getAttribute("class").match(/kind-(\S+)/) || [])[1] || "?";
+      g.children.forEach(function (c) {
+        var cl = c.getAttribute("class") || "";
+        if (!/\bvis\b/.test(cl)) return;
+        var o = c.getAttribute(c.tagName === "path" && !/sym/.test(cl) ? "stroke-opacity" : "fill-opacity");
+        if (o === null || o === undefined) return;
+        var a = res.colorOpacity[k] || (res.colorOpacity[k] = []);
+        if (a.indexOf(String(o)) < 0) a.push(String(o));
+      });
+    });
+    var levBox = el.querySelectorAll("span.clev")[0];
     res.colorLevels = levBox ? levBox.children.length : 0;
+    if (levBox && levBox.children.length) {
+      var lev = levBox.children[0];
+      lev.dispatch("click");
+      res.levelHides = hiddenSeries() > 0 && lev.classList.contains("off");
+      lev.dispatch("click");
+      res.levelShows = hiddenSeries() === 0 && !lev.classList.contains("off");
+    }
     sel.value = ""; sel.dispatch("change");
     res.colorReset = JSON.stringify(fills()) === JSON.stringify(before);
+    var shp = sels[1];
+    res.shapeOptions = shp ? shp.children.length : 0;
+    if (shp) {
+      shp.value = [].concat(gb.shapeVars)[0]; shp.dispatch("change");
+      var syms = function () {
+        return el.querySelectorAll("path.sym").filter(function (s) { return s.style.display !== "none"; }).length;
+      };
+      res.shaped = syms() > 0;
+      shp.value = ""; shp.dispatch("change");
+      res.shapeReset = syms() === 0;
+    }
   }
 
   // mouse: move over the first element -> tooltip + highlight; click pins it; Escape clears

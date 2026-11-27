@@ -328,7 +328,7 @@ test_that("parseJsmFormula(): extra arguments of scaled() must be named, `prior`
 })
 
 test_that("parseJsmFormula(): scaled() in a long formula is an error", {
-  expect_error(parseJsmFormula(x ~ t + scaled(x1), "long"), "only allowed in outcome formulae \\(found in formula for 'x'\\)")
+  expect_error(parseJsmFormula(x ~ t + scaled(x1), "long"), "only allowed in outcome and latent formulae \\(found in formula for 'x'\\)")
 })
 
 test_that("parseJsmFormula(): a covariate named like re / scaled is an ordinary covariate", {
@@ -766,4 +766,13 @@ test_that("collectFormulas(): without INLA a family name is accepted with a warn
                  "INLA is not installed.*'whatever'.*not validated")
   expect_equal(f$out$y$family$family, "whatever")
   expect_null(inlaFamilies())
+})
+
+test_that("parseJsmFormula(): offset() is rejected, as model.matrix() would drop it silently (B21)", {
+  expect_error(parseJsmFormula(x1 ~ t + offset(log(e)) + (1 | id), "long"),
+               "offset\\(\\) is not supported \\(formula for 'x1'\\).*`x1 \\| exposure\\(e\\) ~")
+  expect_error(collectFormulas(list(y ~ t + offset(e) + scaled(x1), x1 ~ t + (1 | id))), "offset\\(\\)")
+  # a variable named offset is an ordinary covariate (as for `re` / `scaled`, B2)
+  p <- parseJsmFormula(x1 ~ t + offset + (1 | id), "long")
+  expect_true("offset" %in% p$variables$covariate)
 })

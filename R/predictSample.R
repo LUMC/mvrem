@@ -35,6 +35,7 @@ posteriorDraws <- function(fit, n) {
   # otherwise it is the first part of the field: it is sampled and not used
   if (isTRUE(cs$.preopt)) {
     keep <- !ct$tag %in% c("APredictor", "Predictor")
+    # re-based so that the first kept component starts at row 1 of config$mean / Q
     ct <- list(tag = ct$tag[keep], start = ct$start[keep] - ct$start[keep][1L] + 1L, length = ct$length[keep])
   }
   nx <- length(cs$config[[1L]]$mean)
@@ -50,8 +51,10 @@ posteriorDraws <- function(fit, n) {
     Q <- symmetricPrecision(cf$Q)
     ch <- Matrix::Cholesky(Q, LDL = FALSE, perm = TRUE)   # P Q P' = L L'
     z <- matrix(stats::rnorm(nx * length(cols)), nx)
+    # x = P' L^-T z ~ N(0, Q^-1)
     x <- as.matrix(Matrix::solve(ch, Matrix::solve(ch, z, system = "Lt"), system = "Pt"))
     if (!is.null(constr) && length(constr$e)) {
+      # condition the draw on A x = e: x - Q^-1 A' (A Q^-1 A')^-1 (A x - e), as inla.posterior.sample()
       A <- matrix(constr$A, ncol = nx)
       QiAt <- as.matrix(Matrix::solve(ch, t(A), system = "A"))
       x <- x - QiAt %*% solve(A %*% QiAt, A %*% x - constr$e)
@@ -106,25 +109,13 @@ drawSummary <- function(s) {
              q0.975 = q[, 3L], mode = mode)
 }
 
-# Predictions by sampling: `inlNew` is buildInlaFormula() of the data with the new
-# rows appended (the last rows of each predicted response's observation stack).
-predictSampled <- function(object, inlNew, newdata, response, type, nsamples, seed) {
-  requireInla()
-  if (!requireNamespace("Matrix", quietly = TRUE))
-    stop("`method = \"sample\"` needs the Matrix package.", call. = FALSE)
-  if (!is.null(seed)) {
-    old <- if (exists(".Random.seed", envir = globalenv(), inherits = FALSE))
-      get(".Random.seed", envir = globalenv(), inherits = FALSE)
-    on.exit(if (is.null(old)) rm(".Random.seed", envir = globalenv()) else
-      assign(".Random.seed", old, envir = globalenv()), add = TRUE)
-    set.seed(seed)
-  }
-  fit <- object$fit
+# The sampler of linear predictors from the posterior draws `dr` (posteriorDraws()) of the fit
+# of `object`: `etaRows(r, st)` = the linear predictor of response r at the rows `st` of a
+# stack of `inlNew` (the model rebuilt with new rows, or `object$inla` itself) x draws;
+# `hyperRow(name, what)` = the draws of a hyperparameter (INLA's name). Used by
+# predictSampled() and survivalCurves().
+etaSampler <- function(object, inlNew, dr, nsamples) {
   inlOld <- object$inla
-  eqs <- bothParts(object$forms)
-  links <- lapply(stats::setNames(response, response), function(r)
-    if (type == "mean") inverseLink(eqs[[r]]$family))   # checked before sampling
-  dr <- posteriorDraws(fit, nsamples)
   hyperRow <- function(name, what) {
     if (!name %in% rownames(dr$hyper))
       sampleUnsupported("`method = \"sample\"`: the fit has no estimated ", what, " ('", name, "'); ",
@@ -135,6 +126,7 @@ predictSampled <- function(object, inlNew, newdata, response, type, nsamples, se
   # random effects of a block at the labels of the rebuilt model (rows) x draws:
   # labels of the fit -> their sampled values; new labels (new groups) -> draws from
   # N(0, Q^-1) with the sampled hyperparameters, one per group level and draw
+  known <- latentHyperRows(inlOld)        # INLA's hyperparameter row names, from the model (D1)
   blockCache <- new.env(parent = emptyenv())
   blockDraws <- function(r, i) {
     key <- paste(r, i)
@@ -149,22 +141,28 @@ predictSampled <- function(object, inlNew, newdata, response, type, nsamples, se
     have <- !is.na(pos)
     B[have, ] <- dr$latent[dr$rows(field)[pos[have]], , drop = FALSE]
     if (any(!have)) {
+      # a correlated block's field holds k * nlev values, effect-major (all levels of effect 1,
+      # then effect 2, ...; randomTerms()): position i = level (i - 1) %% nlev + 1 of effect
+      # (i - 1) %/% nlev + 1
       nlev <- length(valsNew) %/% k
       miss <- which(!have)
       lev <- sort(unique((miss - 1L) %% nlev + 1L))   # new group levels (positions)
+      hr <- blockHyperRows(known, r, i)
+      prec <- hr[hr$short == "prec", , drop = FALSE]
       if (k == 1L) {
-        tau <- hyperRow(paste0("Precision for ", field), "precision")
+        tau <- hyperRow(prec$.inla, "precision")
         B[lev, ] <- matrix(stats::rnorm(length(lev) * nsamples), length(lev)) *
           rep(1 / sqrt(tau), each = length(lev))
       } else {
         if (k > 5L)
           sampleUnsupported("`method = \"sample\"` does not support correlated blocks of more than five ",
                             "effects; use `method = \"refit\"`.")
-        tau <- vapply(seq_len(k), function(e)
-          hyperRow(sprintf("Precision for %s (component %d)", field, e), "precision"), numeric(nsamples))
+        tau <- vapply(seq_len(k), function(e) hyperRow(prec$.inla[e], "precision"), numeric(nsamples))
         rho <- list()
-        for (e1 in seq_len(k - 1L)) for (e2 in (e1 + 1L):k)
-          rho[[paste(e1, e2)]] <- hyperRow(sprintf("Rho%d:%d for %s", e1, e2, field), "correlation")
+        for (j in which(hr$short == "rho")) {
+          e1 <- match(hr$effect[j], b$effects); e2 <- match(hr$effect2[j], b$effects)
+          rho[[paste(e1, e2)]] <- hyperRow(hr$.inla[j], "correlation")
+        }
         z <- array(stats::rnorm(length(lev) * k * nsamples), c(length(lev), k, nsamples))
         for (s in seq_len(nsamples)) {
           R <- diag(k)
@@ -205,11 +203,49 @@ predictSampled <- function(object, inlNew, newdata, response, type, nsamples, se
       z <- inlNew$zero[[paste0(sc$long, "_", r)]]
       zst <- inlNew$stacks[[sc$long]][[r]]
       zrows <- zst[match(st[[sc$index]], zst[[z$index]]), , drop = FALSE]
-      gamma <- hyperRow(paste0("Beta for ", sc$index), "association")
+      gamma <- hyperRow(known$.inla[known$short == "beta" & known$response == r & known$link == sc$long],
+                        "association")
       eta <- eta + etaRows(sc$long, zrows) * rep(gamma, each = n)
     }
     eta
   }
+
+  list(etaRows = etaRows, hyperRow = hyperRow)
+}
+
+# The state of the random number generator (NULL if none yet) and its restoration: callers
+# with a `seed` argument save it, set the seed and restore it on exit.
+saveSeed <- function() {
+  if (exists(".Random.seed", envir = globalenv(), inherits = FALSE))
+    get(".Random.seed", envir = globalenv(), inherits = FALSE)
+}
+restoreSeed <- function(old) {
+  if (is.null(old)) {
+    if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) rm(".Random.seed", envir = globalenv())
+  } else assign(".Random.seed", old, envir = globalenv())
+}
+
+# Predictions by sampling: `inlNew` is buildInlaFormula() of the data with the new
+# rows appended (the last rows of each predicted response's observation stack).
+predictSampled <- function(object, inlNew, newdata, response, type, nsamples, seed) {
+  requireInla()
+  # E38: the sampler evaluates one level of links (outcome <- marker), not the chain through a
+  # latent equation; "auto" falls back to refitting
+  if (length(latentParts(object$forms)))
+    sampleUnsupported("`method = \"sample\"` does not support models with latent equations yet; ",
+                      "use `method = \"refit\"`.")
+  if (!requireNamespace("Matrix", quietly = TRUE))
+    stop("`method = \"sample\"` needs the Matrix package.", call. = FALSE)
+  if (!is.null(seed)) {
+    old <- saveSeed()
+    on.exit(restoreSeed(old), add = TRUE)
+    set.seed(seed)
+  }
+  eqs <- bothParts(object$forms)
+  links <- lapply(stats::setNames(response, response), function(r)
+    if (type == "mean") inverseLink(eqs[[r]]$family))   # checked before sampling
+  dr <- posteriorDraws(object$fit, nsamples)
+  etaRows <- etaSampler(object, inlNew, dr, nsamples)$etaRows
 
   lapply(stats::setNames(response, response), function(r) {
     st <- inlNew$stacks[[r]]$main

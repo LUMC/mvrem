@@ -76,12 +76,16 @@ latexEquation.default <- function(x, data = NULL, ...) {
   } else if (all(c("out", "long") %in% names(x))) {
     if (!is.null(data) && !all(c("out", "long") %in% names(data)))
       stop("For a whole model, `data` must be the result of prepareData().", call. = FALSE)
-    parsed <- bothParts(x)
+    latent <- latentParts(x)                   # E38: latent equations
+    targets <- c(x$long, latentLatexTargets(latent, x$long))
+    parsed <- c(bothParts(x), latent)
     dfs <- if (is.null(data)) list() else bothParts(data)
-    eq <- lapply(parsed, function(p) latexFormula(p, dfs[[p$response]], longs = x$long))
+    eq <- lapply(parsed, function(p) latexFormula(p, dfs[[p$response]], longs = targets,
+                                                  obs = if (p$part == "latent") NULL else "i"))
     zero <- character()
     uDist <- character()
-    for (o in x$out) for (s in o$scaled) {
+    for (o in c(x$out, latent)) for (s in o$scaled) {
+      if (s$target %in% names(latent)) next      # the latent's own line defines its field
       l <- x$long[[s$target]]
       u <- uSymbol(l, o$response, obs = NULL)
       eta <- latexFormula(l, dfs[[l$response]], obs = NULL)$eta
@@ -90,17 +94,26 @@ latexEquation.default <- function(x, data = NULL, ...) {
                              ", \\quad \\left(", paste(vars, collapse = ", "),
                              "\\right) \\in ", annot(paste0("\\mathcal{D}_{", latexName(o$response), "}"),
                                                      annotKey("D", o$response, s$target))))
-      uDist <- c(uDist, paste0(u, " &\\sim ", annot("\\mathcal{N}", distKey("normal")), "\\left(0, \\left(",
+      uDist <- c(uDist, paste0(u, " &\\sim ", normalSymbol(), "\\left(0, \\left(",
                                annot(paste0("\\tau_{", uTag(s$target, o$response), "}"),
                                      annotKey("utau", s$target, o$response)),
                                "\\right)^{-1}\\right)"))
     }
+    for (L in names(latent)) {
+      u <- uSymbol(targets[[L]], L, obs = NULL)
+      uDist <- c(uDist, paste0(u, " &\\sim ", normalSymbol(), "\\left(0, \\left(\\tau_{",
+                               latexName(L), "}\\right)^{-1}\\right)",
+                               if (isTRUE(latent[[L]]$spec$center))
+                                 paste0(", \\quad \\textstyle\\sum ", "u^{(", latexName(L), ")} = 0")))
+    }
     zero <- gsub("+ - ", "- ", zero, fixed = TRUE)
     eqLong <- eq[names(x$long)]
+    eqLatent <- eq[names(latent)]
     eqOut <- eq[names(x$out)]
     lines <- c(unlist(lapply(eqLong, `[[`, "eq"), use.names = FALSE), zero,
+               unlist(lapply(eqLatent, `[[`, "eq"), use.names = FALSE),
                unlist(lapply(eqOut, `[[`, "eq"), use.names = FALSE),
-               unlist(lapply(c(eqLong, eqOut), `[[`, "dist"), use.names = FALSE), uDist)
+               unlist(lapply(c(eqLong, eqLatent, eqOut), `[[`, "dist"), use.names = FALSE), uDist)
   } else {
     stop("`x` must be a parsed formula or the result of collectFormulas().", call. = FALSE)
   }
@@ -121,6 +134,20 @@ print.mvremLatex <- function(x, ...) {
 }
 
 uTag <- function(long, out) paste0(latexName(long), " \\to ", latexName(out))
+
+# The latent equations as targets of links in LaTeX (E38): the parsed formula with its
+# variables extended by those of its own targets (its field is indexed by all of them) and
+# `latentField = TRUE`, so that uSymbol() writes u^{(eta)} without an arrow.
+latentLatexTargets <- function(latent, long) {
+  lapply(latent, function(p) {
+    tg <- long[scaledTargets(p)]
+    p$variables$group <- unique(c(p$variables$group, unlist(lapply(tg, function(l) l$variables$group))))
+    p$variables$covariate <- unique(c(p$variables$covariate,
+                                      unlist(lapply(tg, function(l) l$variables$covariate))))
+    p$latentField <- TRUE
+    p
+  })
+}
 # Variables matching the outcome data to the zero equation of long formula l
 # (its grouping variables and covariates), at observation obs (NULL: no index).
 matchVarsLatex <- function(l, obs = "i") {
@@ -137,8 +164,10 @@ matchVarsLatex <- function(l, obs = "i") {
 # l = parsed long formula, or its name when unknown (then indexed by obs).
 uSymbol <- function(l, out, obs = "i") {
   if (is.character(l)) return(paste0("u^{(", uTag(l, out), ")}_{", obs, "}"))
-  annot(paste0("u^{(", uTag(l$response, out), ")}_{", paste(matchVarsLatex(l, obs), collapse = ","), "}"),
-        annotKey("u", l$response, out))
+  idx <- paste(matchVarsLatex(l, obs), collapse = ",")
+  # the field of a latent equation (E38) is shared by its outcomes: u^{(eta)}
+  if (isTRUE(l$latentField)) return(paste0("u^{(", latexName(l$response), ")}_{", idx, "}"))
+  annot(paste0("u^{(", uTag(l$response, out), ")}_{", idx, "}"), annotKey("u", l$response, out))
 }
 
 # One formula: `eq` (equation line), `dist` (family / residual / RE
@@ -173,6 +202,17 @@ latexFormula <- function(p, df, obs = "i", longs = NULL) {
                    annotKey("assoc", r, s$target))
     terms <- c(terms, paste0(gamma, "\\,", uSymbol(l, r, obs)))
     dist <- c(dist, coefPriorLatex(s$prior, gamma))
+  }
+
+  # a latent equation (E38) defines its field at its evaluation points (no family)
+  if (p$part == "latent") {
+    self <- if (!is.null(longs[[r]])) longs[[r]] else latentLatexTargets(list(p), list())[[1L]]
+    rhs <- if (length(terms)) paste(terms, collapse = " + ") else "0"
+    vars <- matchVarsLatex(self, obs = NULL)
+    return(list(eq = paste0(uSymbol(self, r, obs = NULL), " &= ", rhs, ", \\quad \\left(",
+                            paste(vars, collapse = ", "), "\\right) \\in \\mathcal{D}_{",
+                            latexName(r), "}"),
+                dist = dist, eta = eta))
   }
 
   # family (see familyLatex()); unknown (standalone outcome) -> generic link
@@ -224,10 +264,10 @@ reBlockLatex <- function(blk, p, df, effects, idx, tag, obs) {
   correlated <- blk$correlated && length(effects) > 1L
   dist <- if (correlated) {
     paste0("\\left(", paste(bl, collapse = ", "), "\\right)^\\top",
-           " &\\sim ", annot("\\mathcal{N}", distKey("normal")), "\\left(\\mathbf{0}, \\left(", sym$Q,
+           " &\\sim ", normalSymbol(), "\\left(\\mathbf{0}, \\left(", sym$Q,
            "\\right)^{-1}\\right), \\quad l = 1, \\ldots, ", nLev)
   } else {
-    paste0(bl, " &\\sim ", annot("\\mathcal{N}", distKey("normal")), "\\left(0, \\left(",
+    paste0(bl, " &\\sim ", normalSymbol(), "\\left(0, \\left(",
            annot(sym$tau(idx), sym$precKey), "\\right)^{-1}\\right), \\quad l = 1, \\ldots, ", nLev)
   }
   list(terms = terms, dist = c(dist, reBlockPriorLatex(blk, p, df, effects, idx, correlated, sym)))
@@ -396,6 +436,10 @@ estEntry <- function(par, mean = NULL, sd = NULL, lo = NULL, hi = NULL, item = N
                      band = credibleBand, note = NULL)
   list(par = par, mean = mean, sd = sd, lo = lo, hi = hi, item = item, band = band, note = note)
 
+# A symbol annotated with the estimate stored under `key` in latexState$est (see
+# estimateLookup()): vectorised over sym / key; without an active lookup, or an unknown key,
+# the plain symbol; mode "tooltip" wraps it in \htmlData{}, "inline" (credible-band entries
+# only) in \underset{}.
 annot <- function(sym, key) {
   est <- latexState$est
   if (is.null(est)) return(sym)
@@ -431,7 +475,7 @@ htmlDataString <- function(e, digits) {
     v <- gsub("[^][A-Za-z0-9 ():.^+*/|'<>-]", " ", v, perl = TRUE)
     trimws(gsub(" +", " ", v))
   }
-  num <- function(v) ifelse(is.na(v), "NA", trimws(formatC(signif(v, digits), digits = digits, format = "g")))
+  num <- function(v) numText(v, digits)
   pairs <- c(par = txt(e$par))
   if (!is.null(e$item)) pairs["item"] <- paste(txt(e$item), collapse = ";")
   for (f in c("mean", "sd", "lo", "hi")) if (!is.null(e[[f]])) pairs[f] <- paste(num(e[[f]]), collapse = ";")
@@ -509,7 +553,12 @@ distributionNotes <- function() {
     priorNormal = n("normal prior", "on the association coefficient: mean and precision (1/SD^2) shown"))
   stats::setNames(notes, distKey(names(notes)))
 }
-numText <- function(v, digits = 3) trimws(formatC(signif(v, digits), digits = digits, format = "g"))
+# A number with `digits` significant digits as text (NA as `na`); every display of an estimate
+# goes through it (estimatesTable(), the LaTeX tooltips, numLatex()).
+# The annotated normal-distribution symbol (random effects, u fields, Gaussian priors).
+normalSymbol <- function() annot("\\mathcal{N}", distKey("normal"))
+numText <- function(v, digits = 3, na = "NA")
+  ifelse(is.na(v), na, trimws(formatC(signif(v, digits), digits = digits, format = "g")))
 
 # The prior of the random-effect block of parsed formula p that contains `effect` for group g.
 blockPrior <- function(p, g, effect, df, random = NULL) {
@@ -569,6 +618,7 @@ lookupContext <- function(x) {
     sdNote = function(row) if (!is.null(row)) paste0("SD ", numText(row$mean), " (", numText(row$sd), ")"))
 }
 
+# Lookup entries of the fixed effects (`fixed|r|col`), from fixedEffects().
 fixedEntries <- function(x, ctx) {
   fe <- fixedEffects(x)
   entriesOver(seq_len(nrow(fe)), function(i) annotKey("fixed", fe$response[i], fe$term[i]), function(i)
@@ -576,12 +626,13 @@ fixedEntries <- function(x, ctx) {
              fe$mean[i], fe$sd[i], fe$q0.025[i], fe$q0.975[i]))
 }
 
+# Lookup entries of the associations (`assoc|out|long`), from associations(), noting the prior.
 associationEntries <- function(x, ctx) {
   a <- associations(x)
   entriesOver(seq_len(nrow(a)), function(i) annotKey("assoc", a$outcome[i], a$longitudinal[i]), function(i) {
     sc <- Filter(function(s) s$target == a$longitudinal[i], ctx$eqs[[a$outcome[i]]]$scaled)
     pr <- if (length(sc)) sc[[1L]]$prior
-    estEntry(paste0("association gamma (", a$longitudinal[i], " -> ", a$outcome[i], ")"),
+    estEntry(paste0("association gamma (", linkLabel(a$longitudinal[i], a$outcome[i]), ")"),
              a$mean[i], a$sd[i], a$q0.025[i], a$q0.975[i],
              note = if (is.null(pr)) paste0(priorNote(defaultCoefPrior()), " (default)") else priorNote(pr))
   })
@@ -590,7 +641,7 @@ associationEntries <- function(x, ctx) {
 # Likelihood hyperparameters, keyed by the family's short name (precisions: "prec").
 familyEntries <- function(ctx) {
   h <- ctx$h
-  short <- function(i) if (h$parameter[i] %in% c("residual precision", "precision")) "prec" else h$parameter[i]
+  short <- function(i) h$short[i]
   entriesOver(which(h$type %in% "family"), function(i) annotKey("family", h$response[i], short(i)), function(i) {
     res <- if (short(i) == "prec") ctx$sdOf(h$response[i], NA, "residual")
     fam <- ctx$eqs[[h$response[i]]]$family
@@ -621,7 +672,7 @@ responseEntries <- function(x, ctx, r) {
   # response and fitted mean: observed / posterior values over the observations
   y <- x$inla$stacks[[r]]$main[[x$inla$responses[[r]]]]
   fv <- fittedValues(x, r)
-  c(concatEntries(lapply(p$re, function(blk) blockEntries(ctx, r, p, ctx$prep[[r]], blk))),
+  c(concatEntries(lapply(seq_along(p$re), function(i) blockEntries(ctx, r, p, ctx$prep[[r]], p$re[[i]], i))),
     if (!is.null(res)) keyedEntry(annotKey("eps", r), paste0("residual of ", r), res$mean, res$sd, res$q0.025,
                                   res$q0.975, item = "SD"),
     keyedEntry(annotKey("resp", r),
@@ -637,7 +688,7 @@ responseEntries <- function(x, ctx, r) {
 
 # One random-effect block of response r: each effect's SD, the number of levels and, for
 # the block, its SDs and correlations (the matrix Q).
-blockEntries <- function(ctx, r, p, df, blk) {
+blockEntries <- function(ctx, r, p, df, blk, i) {
   g <- blk$group
   effects <- blockEffects(blk, p, df)
   b <- entriesOver(effects, function(e) annotKey("b", r, g, e), function(e) {
@@ -650,7 +701,7 @@ blockEntries <- function(ctx, r, p, df, blk) {
   nlev <- keyedEntry(annotKey("nlev", r, g), paste0("levels of ", g, " in the data of ", r),
                      note = if (!is.null(nl)) paste0(nl, " levels"))
   vt <- ctx$vt
-  k <- if (!is.null(vt)) which(vt$block == sprintf("%s | %s [%s]", r, g, paste(effects, collapse = ", ")))
+  k <- if (!is.null(vt)) which(vt$response == r & vt$blockId %in% i)
   block <- if (length(k))
     keyedEntry(blockKey(r, g, effects), paste0("covariance of the random effects | ", g, " of ", r),
                vt$mean[k], vt$sd[k], vt$q0.025[k], vt$q0.975[k], note = priorNote(blk$prior),
@@ -680,10 +731,10 @@ zeroEntries <- function(x) {
   concatEntries(lapply(x$inla$zero, function(z) {
     n <- length(x$inla$levels[[z$levels]])
     vars <- paste(z$vars, collapse = " ")
-    c(keyedEntry(annotKey("u", z$long, z$out), paste0("zero-equation field u (", z$long, " -> ", z$out, ")"),
+    c(keyedEntry(annotKey("u", z$long, z$out), paste0("zero-equation field u (", linkLabel(z$long, z$out), ")"),
                  note = paste0("linear predictor of ", z$long, " at the ", n, " combinations of (", vars,
                                ") in the data of ", z$out, ". Its precision is fixed")),
-      keyedEntry(annotKey("utau", z$long, z$out), paste0("precision of u (", z$long, " -> ", z$out, ")"),
+      keyedEntry(annotKey("utau", z$long, z$out), paste0("precision of u (", linkLabel(z$long, z$out), ")"),
                  note = "fixed at exp(-6) (not estimated)"),
       keyedEntry(annotKey("D", z$out, z$long), paste0("combinations of (", vars, ") in the data of ", z$out),
                  note = paste0(n, " unique combinations")))

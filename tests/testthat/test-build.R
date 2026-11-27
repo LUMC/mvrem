@@ -239,8 +239,7 @@ test_that("prepareData(na.pass): a missing covariate is an error asking for na.o
 test_that("prepareData(na.pass): a missing group / trials / exposure / link variable is an error", {
   d <- data.frame(id = rep(c("S1", "S2", "S3"), each = 3), t = rep(0:2, 3), x = seq_len(9) / 10,
                   k = c(1, 2, 0, 3, 1, 2, 0, 1, 2), n = 5, pt = 1.5, cnt = c(0, 1, 2, 1, 0, 3, 1, 1, 0))
-  f <- collectFormulas(list(k | trials(n) ~ t + scaled(x), cnt | exposure(pt) ~ 1 + scaled(x)),
-                       list(x ~ t + (1 | id)), family = list(k = "binomial", cnt = "poisson"))
+  f <- countForms()
   dn <- d; dn$n[2] <- NA
   expect_error(prepareData(f, dn), "Missing values in `n` \\(formula of 'k'\\).*na.omit")
   po <- prepareData(f, dn, na.action = na.omit)
@@ -294,12 +293,9 @@ test_that("summarizeData(): rows, complete rows, groups and zero equations per e
 
 test_that("summarizeData(): list data, several groups, a long formula without random effects", {
   d <- fxSmallData()
-  dLong <- d
-  dLong$x[2] <- NA
-  dLong$t[5] <- NA
-  dLong <- dLong[dLong$id != "S4", ]
-  dOut <- d
-  dOut$t[7] <- NA                       # link variable of y
+  md <- fxMissingData()                 # long: x and t missing, no S4; out: t (link variable of y) missing
+  dLong <- md$long
+  dOut <- md$out
   f <- collectFormulas(list(y ~ 1 + (1 | id) + (1 | site) + scaled(x) + scaled(cnt)),
                        list(x ~ 1 + t + (1 + t | id), cnt ~ t))
   s <- summarizeData(f, dataOut = dOut, dataLong = list(x = dLong, cnt = d))
@@ -453,8 +449,7 @@ test_that("namingScheme(interceptLabel = ): a display label that leaves the INLA
 
 test_that("namingScheme(): trials / exposure / event templates name the input columns", {
   d <- fxSmallData()
-  f <- collectFormulas(list(k | trials(n) ~ t + scaled(x), cnt | exposure(pt) ~ 1 + scaled(x)),
-                       list(x ~ t + (1 | id)), family = list(k = "binomial", cnt = "poisson"))
+  f <- countForms()
   inl <- buildSmall(f, naming = namingScheme(trials = "N_{resp}", exposure = "{resp}_off"))
   expect_equal(inl$inputs$k, c(Ntrials = "N_k"))
   expect_equal(inl$inputs$cnt, c(E = "cnt_off"))
@@ -754,24 +749,23 @@ test_that("buildInlaFormula(): a subject without long data still gets a zero equ
 })
 
 test_that("buildInlaFormula(): a subject without long data still gets a zero equation (outcome without RE)", {
-  skip("KNOWN BUG: RE labels of zero-equation rows of a subject absent from the long data are not in LEVELS when the outcome has no RE on that group")
   d <- fxSmallData()
   inl <- buildSmall(smallForms(), dataOut = d, dataLong = d[d$id != "S4", ])
   z <- inl$stacks$x$y
   expect_true("x|TO|y|S4|1" %in% z$x_TO_y_id_t)
   expect_true(all(z$x_1_id %in% inl$levels$x_1_id))
+  expect_equal(inl$groups$id, c("S1", "S2", "S3", "S4"))
+  # an interaction group, and a marker without observations at one site
+  f <- smallForms("(1 | site:id)")
+  inl <- buildSmall(f, dataOut = d, dataLong = d[d$id != "S4", ])
+  expect_true(all(inl$stacks$x$y$x_1_site.id %in% inl$levels$x_1_site.id))
+  expect_true("B:S4" %in% inl$groups[["site:id"]])
 })
 
 test_that("buildInlaFormula(): outcome rows are matched by covariate values, also with missing covariates", {
-  d <- fxSmallData()
-  # long data: response missing (row 2: S1, t = 1), covariate missing (row 5: S2, t = 1), no S4
-  dLong <- d
-  dLong$x[2] <- NA
-  dLong$t[5] <- NA
-  dLong <- dLong[dLong$id != "S4", ]
-  # outcome data: t (used only for matching) missing in row 7 (S3, t = 0)
-  dOut <- d
-  dOut$t[7] <- NA
+  md <- fxMissingData()                 # see helper-build.R
+  dLong <- md$long
+  dOut <- md$out
   f <- collectFormulas(list(y ~ 1 + (1 | id) + scaled(x)), list(x ~ 1 + t + (1 + t | id)))
   expect_equal(f$out$y$linkVariables, "t")
   dat <- prepareData(f, dataOut = dOut, dataLong = dLong, na.action = na.omit)
@@ -1042,4 +1036,66 @@ test_that("inlaArgumentList(): a survival response is an inla.surv inside a list
 test_that("inlaArgumentList(): a survival response needs INLA", {
   local_mocked_bindings(hasInla = function() FALSE)
   expect_error(inlaArgumentList(fxModel("surv", fit = FALSE)$inla), "INLA package is required")
+})
+
+test_that("buildInlaFormula() / jsm(): a formula without fixed effects (B22)", {
+  d <- fxData()$long
+  m <- jsm(list(y ~ t + scaled(x1)), list(x1 ~ 0 + (1 | id)), data = d, fit = FALSE)
+  expect_length(inlaSpec(m)$fixed$x1$columns, 0L)
+  expect_false(any(grepl("^x1_1\\b|^x1_t\\b", names(inlaData(m)))))
+  expect_match(deparse1(inlaFormula(m)), "f\\(x1_1_id")
+  expect_s3_class(latexEquation(m), "mvremLatex")
+  expect_no_error(withNullDevice(plotModel(m)))
+  m2 <- jsm(list(y ~ 0 + scaled(x1)), list(x1 ~ t + (1 | id)), data = d, fit = FALSE)
+  expect_length(inlaSpec(m2)$fixed$y$columns, 0L)
+})
+
+test_that("prepareData(): a data frame without rows, or na.action dropping every row of a response (B23)", {
+  s <- fxSpec("beta")
+  expect_error(jsm(s$formOut, s$formLong, data = s$data[0, ], family = s$family, fit = FALSE),
+               "data frame in `data` for response 'y' has no rows")
+  dd <- s$data; dd$y <- NA
+  expect_error(jsm(s$formOut, s$formLong, data = dd, family = s$family, na.action = na.omit, fit = FALSE),
+               "No rows left for response 'y': `na.action` dropped all 160 rows")
+  # with na.pass the all-missing response is kept (INLA predicts every row) and the summary
+  # counts 0 complete rows without failing
+  m <- jsm(s$formOut, s$formLong, data = dd, family = s$family, fit = FALSE)
+  expect_equal(dataSummary(m)$equations$complete[dataSummary(m)$equations$response == "y"], 0L)
+  dd$x1 <- NA                                                   # a marker with no value at all
+  m <- jsm(s$formOut, s$formLong, data = dd, family = s$family, fit = FALSE)
+  expect_equal(nrow(modelData(m)$long$x1), 160L)
+})
+
+test_that("prepareData(): a link variable of different type in the outcome and the long data (B24)", {
+  s <- fxSpec("beta")
+  do <- s$data; do$t <- as.character(do$t)
+  expect_error(jsm(s$formOut, s$formLong, dataOut = do, dataLong = s$data, family = s$family, fit = FALSE),
+               "Variable `t` is character in the data of 'y' but numeric in the data of 'x1'")
+  # integer vs double is the same type; a factor vs character grouping variable is matched by value
+  do <- s$data; do$t <- as.integer(do$t * 2)
+  expect_no_error(jsm(list(y ~ t + scaled(x1)), s$formLong, dataOut = do, dataLong = s$data,
+                      family = s$family, fit = FALSE))
+})
+
+test_that("buildInlaFormula(): a categorical covariate with a single value is an error naming it (P7)", {
+  d <- fxData()$long; d$grp <- factor("a")
+  expect_error(jsm(list(y ~ grp + scaled(x1)), list(x1 ~ t + (1 | id)), data = d, fit = FALSE),
+               "Covariate `grp` of the formula for 'y' has a single value \\('a'\\)")
+})
+
+test_that("jsm(): flags, threads and inlaOptions are validated up front", {
+  s <- fxSpec("beta")
+  j <- function(...) jsm(s$formOut, s$formLong, data = s$data, family = s$family, fit = FALSE, ...)
+  expect_error(j(verbose = "yes"), "`verbose` must be TRUE or FALSE")
+  expect_error(jsm(s$formOut, s$formLong, data = s$data, fit = NA), "`fit` must be TRUE or FALSE")
+  expect_error(j(criteria = 1), "`criteria` must be TRUE or FALSE")
+  expect_error(j(threads = -1), "`threads` must be NULL, a whole number >= 1")
+  expect_error(j(threads = 2.5), "`threads`")
+  expect_error(j(inlaOptions = "x"), "`inlaOptions` must be a named list")
+  expect_error(j(inlaOptions = list(1)), "`inlaOptions` must be a named list")
+  expect_error(j(inlaOptions = list(family = "x")), "must not set `family`")
+  m <- j(threads = 2L, inlaOptions = list(control.inla = list(strategy = "gaussian")))
+  expect_equal(m$options$threads, 2L)
+  expect_error(refit(m, threads = 0), "`threads`")
+  expect_error(inlaData(m, n = -1), "`n` must be a single number >= 0")
 })

@@ -1,6 +1,7 @@
-# Pieces shared by the plots (R/plot.R, R/plotResiduals.R, R/plotResults.R, R/htmlPlot.R and
-# plot.mvremPredictions() in R/predict.R): the colours, the panel grid, the choice of the
-# subjects drawn, the per-subject series, panel titles and the legends of the line plots.
+# Pieces shared by every plot file (R/plot.R, R/plotResiduals.R, R/plotResults.R,
+# R/plotSurvival.R, R/plotModel.R, R/htmlPlot.R and plot.mvremPredictions() in R/predict.R):
+# the colours, the panel grid, the choice of the subjects drawn, the per-subject series,
+# panel titles, the colour / shape grouping (groupSpec()) and the legends of the line plots.
 
 # ---- colours ---------------------------------------------------------------------------------
 
@@ -35,18 +36,38 @@ plotColors <- list(
 
 # Default number of panel columns: one row for up to two panels, then two or three columns.
 autoNcol <- function(np, ncol = NULL) {
-  if (!is.null(ncol)) return(ncol)
+  if (!is.null(ncol)) return(checkCount(ncol, "ncol", 1L))
   if (np <= 2) np else if (np <= 6) 2L else 3L
 }
 
 # Base graphics: a grid of `np` panels (`ncol` columns, default autoNcol()); returns the old
 # `par()` settings for on.exit().
+# Draw `np` base-graphics panels: `draw(i)` draws panel i on the grid of panelLayout(), whose
+# settings are restored afterwards.
+withPanels <- function(np, ncol, draw) {
+  op <- panelLayout(np, ncol)
+  on.exit(graphics::par(op), add = TRUE)
+  for (i in seq_len(np)) draw(i)
+  invisible()
+}
+
+# The frame of a base-graphics panel: an empty plot with the panel's limits, labels and title,
+# the reference lines (`hline` / `vline`, dotted) and the panel's `note` (top right, small).
+panelFrame <- function(pn, hline = pn$hline, vline = pn$vline, xlim = pn$xlim, ylim = pn$ylim, ...) {
+  graphics::plot(xlim, ylim, type = "n", xlab = pn$xlab, ylab = pn$ylab, main = pn$title,
+                 cex.main = 0.95, ...)
+  b <- plotColors$base
+  if (!is.null(hline)) graphics::abline(h = hline, lty = 3, col = b$reference)
+  if (!is.null(vline)) graphics::abline(v = vline, lty = 3, col = b$reference)
+  if (!is.null(pn$note)) graphics::mtext(pn$note, side = 3, adj = 1, line = 0.1, cex = 0.6)
+}
+
 panelLayout <- function(np, ncol = NULL) {
   ncol <- autoNcol(np, ncol)
   graphics::par(mfrow = c(ceiling(np / ncol), ncol), mar = c(4, 4, 2.5, 1), mgp = c(2.4, 0.8, 0))
 }
 
-# Base graphics: an empty panel with only a title (e.g. a survival response in plot()).
+# Base graphics: an empty panel with only a title (e.g. a time variable missing in an equation).
 emptyPanel <- function(title) {
   graphics::plot.new()
   graphics::title(title, cex.main = 0.9)
@@ -57,7 +78,7 @@ emptyPanel <- function(title) {
 # Default number of subjects drawn: the widget stays readable with many more lines, as the
 # highlight picks one out.
 defaultSubjectCount <- function(n, interactive) {
-  if (!is.null(n)) return(n)
+  if (!is.null(n)) return(checkCount(n, "n", 0L))
   if (interactive) 300L else 30L
 }
 
@@ -85,7 +106,7 @@ subjectSeries <- function(ids, gg, keep, x, values, cv = NULL) {
     k <- which(gg == g & keep)
     k <- k[order(x[k])]
     c(list(id = g, x = x[k]), lapply(values, function(v) if (!is.null(v)) v[k]),
-      # values of the colouring variables at the points (colorBy), named by variable
+      # values of the colour / shape variables at the points (colorBy, shapeBy), named by variable
       if (length(cv)) list(cv = lapply(cv, function(v) v[k])))
   })
 }
@@ -156,35 +177,34 @@ panelConnect <- function(pn) if (!is.null(pn$connect)) pn$connect else pn$groupe
 # counterpart of htmlLines(): subject lines (observed, fitted), the smooth means, a reference
 # line `hline` and the legend `entries` (linesLegend()) in the first panel.
 drawLinesPanels <- function(d, ncol, entries) {
-  op <- panelLayout(length(d$panels), ncol)
-  on.exit(graphics::par(op), add = TRUE)
   b <- plotColors$base
-  for (i in seq_along(d$panels)) {
+  # the legend goes into the first panel of lines (a survival panel has its own)
+  legendAt <- c(which(!vapply(d$panels, function(pn) isTRUE(pn$survival), NA)), 1L)[1L]
+  withPanels(length(d$panels), ncol, function(i) {
     pn <- d$panels[[i]]
-    if (isTRUE(pn$missing)) {
-      emptyPanel(pn$title)
-      next
+    if (isTRUE(pn$missing)) return(emptyPanel(pn$title))
+    if (isTRUE(pn$survival)) {
+      drawSurvivalPanel(pn, d$groups)
+      if (i == legendAt) groupLegends(d$groups)
+      return(invisible())
     }
-    graphics::plot(pn$xlim, pn$ylim, type = "n", xlab = pn$xlab, ylab = pn$ylab,
-                   main = pn$title, cex.main = 0.95)
-    if (!is.null(pn$hline)) graphics::abline(h = pn$hline, lty = 3, col = b$reference)
-    if (!is.null(pn$note)) graphics::mtext(pn$note, side = 3, adj = 1, line = 0.1, cex = 0.6)
+    panelFrame(pn)
     connect <- panelConnect(pn)
-    spec <- d$colors
+    spec <- d$groups
     for (s in pn$subjects) {
-      # colorBy: points by their level; the line too when the level is the same at all points
-      sc <- seriesColors(s, spec, b$subject); pc <- sc$points; lc <- sc$line
+      # colorBy / shapeBy: points by their level; the line coloured too when the level is the same at all points
+      sc <- seriesStyle(s, spec, b$subject); pc <- sc$points; lc <- sc$line
       if (connect) graphics::lines(s$x, s$y, col = lc, lwd = 0.8)
-      graphics::points(s$x, s$y, col = pc, pch = 16, cex = 0.5 * if (is.null(s$size)) 1 else s$size)
+      graphics::points(s$x, s$y, col = pc, pch = sc$pch, cex = 0.5 * if (is.null(s$size)) 1 else s$size)
       if (pn$useFit && pn$grouped) graphics::lines(s$x, s$fit, col = b$fit, lwd = 1.2, lty = 3)
       if (pn$useFit && !pn$grouped) graphics::points(s$x, s$fit, col = b$fit, pch = 16, cex = 0.4)
     }
     if (!is.null(pn$smoothObs)) graphics::lines(pn$smoothObs, col = b$mean, lwd = 2.5)
     if (!is.null(pn$smoothFit)) graphics::lines(pn$smoothFit, col = plotColors$accent, lwd = 2.5, lty = 2)
     for (s in pn$predicted) graphics::points(s$x, s$fit, col = plotColors$accent, pch = 1, cex = 0.8)
-    if (i == 1L) baseLegend(entries)
-    if (i == 1L) colorLegend(d$colors)
-  }
+    if (i == legendAt) baseLegend(entries)
+    if (i == legendAt) groupLegends(d$groups)
+  })
 }
 
 # Smooth curve (lowess) of `y` against `x` over the finite pairs; NULL when there are too few
@@ -199,7 +219,8 @@ smoothCurve <- function(x, y) {
 # they share its range (and therefore its tick marks, which both renderers derive from the
 # range). Panels without data (`missing`) or without a finite range are left as they are.
 shareXlim <- function(panels) {
-  has <- vapply(panels, function(p) !isTRUE(p$missing) && length(p$xlim) == 2L &&
+  # (survival panels have the survival time on their x axis: not shared)
+  has <- vapply(panels, function(p) !isTRUE(p$missing) && !isTRUE(p$survival) && length(p$xlim) == 2L &&
                   all(is.finite(p$xlim)), NA)
   if (sum(has) < 2L) return(panels)
   r <- range(unlist(lapply(panels[has], `[[`, "xlim")))
@@ -230,26 +251,34 @@ weightSizes <- function(w) {
 # Panel note of a weighted response.
 weightNote <- function(p) paste0("point area proportional to ", deparse1(p$aux$weights))
 
-# ---- colouring by a grouping variable (colorBy) ------------------------------------------------
+# ---- colour and shape by a categorical variable of the data (colorBy, shapeBy; E30) ----------
+# One concept for both: the candidates are the categorical columns of the data (factor, character,
+# logical; also display-only columns that no formula uses, see displayColumns()), the spec lists
+# them with their levels, and every subject plot draws points (and constant-level lines) by the
+# selected variables. The widget offers both as dropdowns; clicking a level in their legends
+# hides / shows that subset (mvremPlot.js).
 
 maxColorLevels <- 12L
+maxShapeLevels <- 6L
+# shapes of the levels, in order: widget symbol names and base-graphics pch
+plotShapes <- c(circle = 16, square = 15, triangle = 17, diamond = 18, cross = 4, plus = 3)
 
-# The variables a line plot can be coloured by: categorical columns (factor, character, logical)
-# of the model's data with 2 to maxColorLevels distinct values over all responses (so not the
-# subject id), in the order of appearance; `.key` excluded.
-colorCandidates <- function(prep) {
+# The variables a subject plot can be coloured (or shaped) by: categorical columns of the
+# model's data with 2 to `maxLevels` distinct values over all responses (so not the subject
+# id), in the order of appearance; `.key` excluded.
+groupCandidates <- function(prep, maxLevels = maxColorLevels) {
   cand <- unique(unlist(lapply(prep, function(df)
     names(df)[vapply(df, function(v) is.factor(v) || is.character(v) || is.logical(v), NA)])))
   cand <- setdiff(cand, keyColumn)
   ok <- vapply(cand, function(v) {
-    n <- length(colorLevelsOf(prep, v))
-    n >= 2L && n <= maxColorLevels
+    n <- length(groupLevelsOf(prep, v))
+    n >= 2L && n <= maxLevels
   }, NA)
   cand[ok]
 }
 
 # The levels of variable `v` over all data frames: factor levels in their order, else sorted.
-colorLevelsOf <- function(prep, v) {
+groupLevelsOf <- function(prep, v) {
   vals <- lapply(prep, `[[`, v)
   vals <- Filter(Negate(is.null), vals)
   levs <- unique(unlist(lapply(vals, function(x) if (is.factor(x)) levels(droplevels(x)) else character())))
@@ -257,50 +286,94 @@ colorLevelsOf <- function(prep, v) {
   setdiff(unique(c(levs, other)), NA_character_)
 }
 
-# The colouring of a line plot: the candidate variables, their levels, the palette and the
-# selected variable (`colorBy`, NULL = grey), checked.
-colorSpec <- function(prep, colorBy = NULL) {
-  vars <- colorCandidates(prep)
-  if (!is.null(colorBy)) {
-    if (!isString(colorBy) || !colorBy %in% vars)
-      stop("`colorBy` must be one of the categorical variables of the data with 2 to ",
-           maxColorLevels, " levels: ",
-           if (length(vars)) paste(vars, collapse = ", ") else "(none in this model)", ".", call. = FALSE)
-  }
-  list(vars = vars, levels = stats::setNames(lapply(vars, colorLevelsOf, prep = prep), vars),
-       palette = plotColors$groups, selected = colorBy)
+# The colour / shape spec of a subject plot: the candidate variables (`vars` for colour,
+# `shapeVars` with at most maxShapeLevels levels for shape), their levels, the palette and
+# shapes, and the selected variables (`color` = colorBy, `shape` = shapeBy; NULL = none), checked.
+groupSpec <- function(prep, colorBy = NULL, shapeBy = NULL) {
+  vars <- groupCandidates(prep, maxColorLevels)
+  levels <- stats::setNames(lapply(vars, groupLevelsOf, prep = prep), vars)
+  shapeVars <- vars[lengths(levels) <= maxShapeLevels]
+  checkGroupArgument(colorBy, vars, "colorBy", maxColorLevels)
+  checkGroupArgument(shapeBy, shapeVars, "shapeBy", maxShapeLevels)
+  list(vars = vars, shapeVars = shapeVars, levels = levels, palette = plotColors$groups,
+       shapes = names(plotShapes), color = colorBy, shape = shapeBy)
 }
 
-# The values of the colouring variables in the rows of `df` (as character; NULL when `df` lacks
+checkGroupArgument <- function(value, vars, arg, maxLevels) {
+  if (is.null(value)) return(invisible())
+  if (!isString(value) || !value %in% vars)
+    stop("`", arg, "` must be one of the categorical variables of the data with 2 to ",
+         maxLevels, " levels: ",
+         if (length(vars)) paste(vars, collapse = ", ") else "(none in this model)", ".", call. = FALSE)
+}
+
+# The values of the candidate variables in the rows of `df` (as character; NULL when `df` lacks
 # the variable), for subjectSeries(cv = ).
-colorColumns <- function(df, spec) {
+groupColumns <- function(df, spec) {
   Filter(Negate(is.null), stats::setNames(lapply(spec$vars, function(v)
     if (!is.null(df[[v]])) as.character(df[[v]])), spec$vars))
 }
 
-# Base graphics: the colours of a subject series under colorBy: `points` by their level, `line`
-# = the level's colour when it is the same at all points, else `default`.
-seriesColors <- function(s, spec, default, alpha = 0.8) {
-  if (is.null(spec$selected)) return(list(points = default, line = default))
-  pc <- grDevices::adjustcolor(colorOf(s$cv[[spec$selected]], spec, default), alpha)
-  list(points = pc, line = if (length(unique(pc)) == 1L) pc[1L] else default)
+# Base graphics: the style of a subject series under colorBy / shapeBy: `points` colours by
+# their level, `line` = the level's colour when it is the same at all points, else `default`,
+# and `pch` by the level of the shape variable (16 = circle without one).
+seriesStyle <- function(s, spec, default, alpha = 0.8) {
+  pch <- pchOf(if (!is.null(spec$shape)) s$cv[[spec$shape]], spec, length(s$x))
+  if (is.null(spec$color)) return(list(points = default, line = default, pch = pch))
+  pc <- grDevices::adjustcolor(colorOf(s$cv[[spec$color]], spec, default), alpha)
+  list(points = pc, line = if (length(unique(pc)) == 1L) pc[1L] else default, pch = pch)
 }
 
-# Base graphics: the legend of the colorBy levels (top right; nothing when no variable is selected).
-colorLegend <- function(spec) {
-  if (is.null(spec$selected)) return(invisible())
-  levs <- spec$levels[[spec$selected]]
-  graphics::legend("topright", bty = "n", cex = 0.7, pch = 16, title = spec$selected,
-                   legend = levs, col = colorOf(levs, spec, plotColors$base$subject))
+# Base graphics: the legends of the selected variables: colour top right, shape bottom right.
+groupLegends <- function(spec) {
+  if (!is.null(spec$color)) {
+    levs <- spec$levels[[spec$color]]
+    graphics::legend("topright", bty = "n", cex = 0.7, pch = 16, title = spec$color,
+                     legend = levs, col = colorOf(levs, spec, plotColors$base$subject))
+  }
+  if (!is.null(spec$shape)) {
+    levs <- spec$levels[[spec$shape]]
+    graphics::legend("bottomright", bty = "n", cex = 0.7, title = spec$shape, legend = levs,
+                     pch = pchOf(levs, spec, length(levs)), col = plotColors$base$mean)
+  }
 }
 
-# Base graphics: the colour of each value `vals` of the selected variable (`default` when no
+# Base graphics: the colour of each value `vals` of the colour variable (`default` when no
 # variable is selected, the value is missing or the series has no such variable).
 colorOf <- function(vals, spec, default) {
-  v <- spec$selected
+  v <- spec$color
   if (is.null(v) || is.null(vals)) return(rep(default, max(1L, length(vals))))
   k <- match(vals, spec$levels[[v]])
   out <- spec$palette[(k - 1L) %% length(spec$palette) + 1L]
   out[is.na(k)] <- default
   out
+}
+
+# Base graphics: the pch of each value `vals` of the shape variable (16 when none is selected,
+# the value is missing or the series has no such variable); `n` values when `vals` is NULL.
+pchOf <- function(vals, spec, n) {
+  v <- spec$shape
+  if (is.null(v) || is.null(vals)) return(rep(16, max(1L, n)))
+  k <- match(vals, spec$levels[[v]])
+  out <- unname(plotShapes)[(k - 1L) %% length(plotShapes) + 1L]
+  out[is.na(k)] <- 16
+  out
+}
+
+# The data of a model as the plots see it: the prepared data of each response with the
+# display-only columns of the model (`x$display`, displayColumns()) added. Those are row-aligned
+# with the prepared data; rows beyond them (the new rows of a prediction model) get NA.
+plotData <- function(x) {
+  prep <- bothParts(x$data)
+  disp <- bothParts(x$display)
+  for (r in intersect(names(prep), names(disp))) {
+    df <- prep[[r]]; dd <- disp[[r]]
+    for (v in setdiff(names(dd), names(df))) {
+      val <- dd[[v]][seq_len(nrow(df))]          # NA beyond the rows of the fit
+      if (is.factor(dd[[v]])) val <- factor(as.character(val), levels = levels(dd[[v]]))
+      df[[v]] <- val
+    }
+    prep[[r]] <- df
+  }
+  prep
 }

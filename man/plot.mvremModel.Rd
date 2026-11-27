@@ -15,6 +15,7 @@
   ncol = NULL,
   interactive = NULL,
   colorBy = NULL,
+  shapeBy = NULL,
   ...
 )
 }
@@ -43,11 +44,14 @@ the grouping variable), so that dense data stay readable. Default: 30, and
 identification of the subjects if the htmlwidgets package is installed,
 else base graphics; \code{TRUE} / \code{FALSE} force one of them (see \code{\link[=htmlPlot]{htmlPlot()}}).}
 
-\item{colorBy}{\code{NULL} (default: grey) or the name of a categorical variable of the data
-(factor, character or logical, 2 to 12 levels, e.g. a clinic or a device) by which the
-observed points are coloured; a subject's line takes the colour too when the variable is
-constant within the subject. The widget offers all such variables in a dropdown
-("color:"), \code{colorBy} only sets its initial choice.}
+\item{colorBy, shapeBy}{\code{NULL} (default: grey circles) or the name of a categorical variable
+of the data (factor, character or logical; 2 to 12 levels for \code{colorBy}, 2 to 6 for
+\code{shapeBy}; e.g. a clinic or a device, also a column of the data that no formula uses) by
+which the observed points are coloured / shaped; a subject's line takes the colour too when
+the variable is constant within the subject. The widget offers all such variables in two
+dropdowns ("color:", "shape:"); these arguments only set the initial choice. In the
+widget, clicking a level in the legend of the chosen variable hides that subset of the data
+(its points, and the subjects whose value is constant), clicking again shows it.}
 
 \item{...}{Ignored.}
 }
@@ -70,12 +74,20 @@ responses with \code{exposure()} as rates (counts / exposure), so that they are
 comparable with the fitted values, which are on this scale. Transformed
 responses (e.g. \code{log(w)}) are shown on the transformed scale.
 
+A survival response (one row per subject) is drawn against its own time: the
+Kaplan-Meier curve with the censored times as open circles and, for a fitted
+model, the model's survival curve averaged over the subjects, with a 95\% band
+when the fit keeps INLA's configurations (see \code{\link[=survivalCurves]{survivalCurves()}}). With
+\code{colorBy} a variable of the survival data, there is one curve per level.
+
 By default (\code{interactive = NULL}, when the suggested package htmlwidgets is
 installed) the plot is an HTML widget (see \code{\link[=htmlPlot]{htmlPlot()}}): the
 subject under the mouse is identified (id, time, observed and fitted value)
 and highlighted in all panels at once, a click pins a subject, a search box
-finds an id, and the legend switches elements on and off. The widget works
-offline. \code{interactive = FALSE} draws with base graphics.
+finds subjects while typing (by id, or by the value of a subject-level
+categorical variable such as a clinic) and lists them in a dropdown (a pick
+highlights that subject or all subjects of that clinic), and the legend
+switches elements on and off. The widget works offline. \code{interactive = FALSE} draws with base graphics.
 }
 \examples{
 \dontrun{

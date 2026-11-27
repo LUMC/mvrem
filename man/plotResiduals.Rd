@@ -18,6 +18,7 @@ plotResiduals(x, ...)
   ncol = NULL,
   interactive = NULL,
   colorBy = NULL,
+  shapeBy = NULL,
   ...
 )
 }
@@ -49,11 +50,14 @@ the grouping variable), so that dense data stay readable. Default: 30, and
 identification of the subjects if the htmlwidgets package is installed,
 else base graphics; \code{TRUE} / \code{FALSE} force one of them (see \code{\link[=htmlPlot]{htmlPlot()}}).}
 
-\item{colorBy}{\code{NULL} (default: grey) or the name of a categorical variable of the data
-(factor, character or logical, 2 to 12 levels, e.g. a clinic or a device) by which the
-observed points are coloured; a subject's line takes the colour too when the variable is
-constant within the subject. The widget offers all such variables in a dropdown
-("color:"), \code{colorBy} only sets its initial choice.}
+\item{colorBy, shapeBy}{\code{NULL} (default: grey circles) or the name of a categorical variable
+of the data (factor, character or logical; 2 to 12 levels for \code{colorBy}, 2 to 6 for
+\code{shapeBy}; e.g. a clinic or a device, also a column of the data that no formula uses) by
+which the observed points are coloured / shaped; a subject's line takes the colour too when
+the variable is constant within the subject. The widget offers all such variables in two
+dropdowns ("color:", "shape:"); these arguments only set the initial choice. In the
+widget, clicking a level in the legend of the chosen variable hides that subset of the data
+(its points, and the subjects whose value is constant), clicking again shows it.}
 }
 \value{
 The widget, or \code{x} invisibly for base graphics.

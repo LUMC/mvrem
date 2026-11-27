@@ -55,22 +55,50 @@ keyColumn <- ".key"
 #' @export
 prepareData <- function(forms, data = NULL, dataOut = NULL, dataLong = NULL,
                         na.action = stats::na.pass) {
-  na.action <- match.fun(na.action)
-  list(
-    out = assignData(resolveData(forms, "out", data, dataOut), forms$out, na.action),
-    long = assignData(resolveData(forms, "long", data, dataLong), forms$long, na.action)
-  )
+  prepareParts(forms, data, dataOut, dataLong, na.action)
 }
 
-assignData <- function(data, parsed, na.action) {
+# prepareData() proper; `allowEmpty` lets summarizeData() count complete rows when a response
+# has none (a model cannot be built from it, so prepareData() itself refuses it, B23).
+prepareParts <- function(forms, data, dataOut, dataLong, na.action, allowEmpty = FALSE) {
+  na.action <- match.fun(na.action)
+  res <- list(
+    out = assignData(resolveData(forms, "out", data, dataOut), forms$out, na.action, allowEmpty),
+    long = assignData(resolveData(forms, "long", data, dataLong), forms$long, na.action, allowEmpty)
+  )
+  checkLinkTypes(forms, res)
+  res
+}
+
+assignData <- function(data, parsed, na.action, allowEmpty = FALSE) {
   argName <- attr(data, "argName")
   res <- lapply(names(parsed), function(r) {
-    df <- addKey(data[[r]], argName)
+    df <- addKey(data[[r]], argName, r)
     res <- selectData(parsed[[r]], df, na.action)
+    if (!allowEmpty && !nrow(res))
+      stop("No rows left for response '", r, "': `na.action` dropped all ", nrow(df),
+           " rows of its data frame in `", argName, "`.", call. = FALSE)
     checkResponse(parsed[[r]], res)
     res
   })
   stats::setNames(res, names(parsed))
+}
+
+# B24: the zero equations match outcome rows to the linked long formula by the values of its
+# covariates, so a covariate must be numeric in both data frames or categorical in both.
+checkLinkTypes <- function(forms, res) {
+  kind <- function(v) if (is.numeric(v)) "numeric" else "categorical"
+  for (o in forms$out) for (l in scaledTargets(o)) {
+    dOut <- res$out[[o$response]]
+    dLong <- res$long[[l]]
+    for (v in intersect(forms$long[[l]]$variables$covariate, names(dOut))) {
+      if (kind(dOut[[v]]) != kind(dLong[[v]]))
+        stop("Variable `", v, "` is ", class(dOut[[v]])[1L], " in the data of '", o$response,
+             "' but ", class(dLong[[v]])[1L], " in the data of '", l, "': the link between them ",
+             "needs the same type in both.", call. = FALSE)
+    }
+  }
+  invisible()
 }
 
 # Data of one part: the part-specific argument if given, else `data`, matched
@@ -154,7 +182,7 @@ selectData <- function(p, df, na.action) {
   # Only the response may stay missing (INLA treats a missing response as a
   # prediction); covariates, grouping variables, trials / exposure and link
   # variables must be complete in the rows that are kept.
-  pred <- unique(c(p$variables$covariate, p$variables$group, p$variables$aux, p$linkVariables))
+  pred <- formulaVariables(p, response = FALSE)
   if (length(pred)) {
     kept <- na.action(df[pred])
     bad <- pred[vapply(pred, function(v) anyNA(kept[[v]]), NA)]
@@ -162,6 +190,14 @@ selectData <- function(p, df, na.action) {
       stop("Missing values in ", paste0("`", bad, "`", collapse = ", "), " (formula of '", p$response,
            "'): only the response may be missing with this `na.action`. Use ",
            "`na.action = na.omit` to drop such rows.", call. = FALSE)
+  }
+  vars <- formulaVariables(p)
+  if (!nrow(na.action(df[vars]))) {
+    # no row kept: lme4 would stop with "0 (non-NA) cases"; the caller decides (B23)
+    res <- df[0L, c(keyColumn, vars), drop = FALSE]
+    for (g in unique(reGroups(p))) res[[g]] <- factor(character())
+    rownames(res) <- NULL
+    return(res)
   }
   if (!length(p$re)) {
     frame <- stats::model.frame(formula, df, na.action = na.action)
@@ -173,8 +209,7 @@ selectData <- function(p, df, na.action) {
     frame <- glf$fr
     groups <- glf$reTrms$flist
   }
-  vars <- unique(unlist(p$variables, use.names = FALSE))
-  res <- df[rownames(frame), unique(c(keyColumn, vars, p$linkVariables)), drop = FALSE]
+  res <- df[rownames(frame), c(keyColumn, vars), drop = FALSE]
   # the model frame above covers only the variables of the lme4 formula; trials / exposure /
   # weights (aux) and the link variables are not in it, so na.action is applied once more
   # to drop (na.omit) or reject (na.fail) rows missing one of them
@@ -187,9 +222,9 @@ selectData <- function(p, df, na.action) {
   res
 }
 
+# Every variable of the formula (and its link variables) must be a column of its data frame.
 checkVariables <- function(df, p, argName) {
-  vars <- unique(c(unlist(p$variables, use.names = FALSE), p$linkVariables))
-  miss <- setdiff(vars, names(df))
+  miss <- setdiff(formulaVariables(p), names(df))
   if (length(miss))
     stop("Variable(s) used in formula for '", p$response, "' not found in `",
          argName, "`: ", paste(miss, collapse = ", "), call. = FALSE)
@@ -197,9 +232,12 @@ checkVariables <- function(df, p, argName) {
 }
 
 # Key = "K" + user-provided row names if present (must be unique), else "K" + row number.
-addKey <- function(df, argName) {
+addKey <- function(df, argName, response = NULL) {
   if (keyColumn %in% names(df))
     stop("Column name '", keyColumn, "' is reserved for internal use.", call. = FALSE)
+  if (!nrow(df))
+    stop("The data frame in `", argName, "`", if (!is.null(response)) paste0(" for response '", response, "'"),
+         " has no rows.", call. = FALSE)
   hasRowNames <- .row_names_info(df) > 0L
   ids <- if (hasRowNames) rownames(df) else seq_len(nrow(df))
   if (anyNA(ids) || anyDuplicated(ids))
@@ -207,4 +245,26 @@ addKey <- function(df, argName) {
          call. = FALSE)
   df[[keyColumn]] <- paste0("K", ids)
   df
+}
+
+# Display-only columns (E30): per response, the categorical columns (factor, character, logical)
+# of the user's data with 2 to maxColorLevels distinct values that the prepared data lacks (no
+# formula uses them, e.g. the device behind a weight), row-aligned with the prepared data `dat`
+# (rows matched by `.key`). Only the plots use them (colorBy / shapeBy, plotData()); INLA never
+# sees them. Same structure as `dat`: list(out, long) of data frames (zero columns when none).
+displayColumns <- function(forms, dat, data = NULL, dataOut = NULL, dataLong = NULL) {
+  part <- function(p, dataPart) {
+    raw <- resolveData(forms, p, data, dataPart)
+    argName <- attr(raw, "argName")
+    stats::setNames(lapply(names(forms[[p]]), function(r) {
+      df <- addKey(plainDataFrame(raw[[r]]), argName)
+      keep <- names(df)[vapply(df, function(v) {
+        (is.factor(v) || is.character(v) || is.logical(v)) &&
+          length(unique(v[!is.na(v)])) %in% 2:maxColorLevels
+      }, NA)]
+      keep <- setdiff(keep, c(names(dat[[p]][[r]]), keyColumn))
+      df[match(dat[[p]][[r]][[keyColumn]], df[[keyColumn]]), keep, drop = FALSE]
+    }), names(forms[[p]]))
+  }
+  list(out = part("out", dataOut), long = part("long", dataLong))
 }

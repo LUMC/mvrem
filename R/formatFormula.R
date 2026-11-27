@@ -27,12 +27,14 @@ formatInlaFormula.default <- function(inl, nrows = 4L, digits = 3L, ...) {
   resp <- names(inl$terms)
   for (i in seq_along(resp)) {
     r <- resp[i]
+    isLatent <- r %in% names(inl$latent)       # E38: zero rows only
     out <- c(out, "   #",
              paste0("   # ----- ", r, ": ", deparse1(inl$formulas[[r]]), " -----"),
-             familyComment("", inl, inl$responses[[r]]),
+             if (!isLatent) familyComment("", inl, inl$responses[[r]]),
              if (nrows > 0) inputComment(inl$inputs[[r]]))
     if (r %in% names(inl$zeroResponses))
-      out <- c(out, familyComment("zero equations: ", inl, inl$zeroResponses[[r]]))
+      out <- c(out, familyComment(if (isLatent) "latent equations: " else "zero equations: ",
+                                  inl, inl$zeroResponses[[r]]))
     out <- c(out, "   #")
     if (nrows > 0) {
       parts <- lapply(inl$stacks[[r]], utils::head, n = nrows)

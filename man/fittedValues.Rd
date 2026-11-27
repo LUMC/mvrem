@@ -34,10 +34,14 @@ equation's data, \code{observed} (for \code{type = "mean"}) and the posterior
 \code{mean}, \code{sd}, \code{q0.025}, \code{q0.5}, \code{q0.975}, \code{mode}; one row per observation.
 \item \code{residuals()}: the same (\code{type = "mean"}) with a column \code{residual} =
 \code{observed - mean} (\code{NA} for a missing response); see \code{\link[=plotResiduals]{plotResiduals()}}.
-\item \code{modelFit()}: a data frame with one row per response and an \code{overall}
-row: \code{dic}, \code{waic}, \code{logScore} (minus the sum of log CPO, smaller is
-better), \code{cpoFailures} (observations whose CPO INLA flags as unreliable)
-and, for the overall row, the log marginal likelihood \code{mlik}.
+\item \code{modelFit()}: a data frame with one row per observed response, an
+\code{observations} row (the observation rows of all responses together) and an
+\code{overall} row (INLA's totals over all rows of the model, which include the
+zero-equation and latent-equation rows: pseudo-observations whose number grows
+with the links of the model, so compare models with the \code{observations} row or the
+rows of the responses they share): \code{dic}, \code{waic}, \code{logScore} (minus the sum of log
+CPO, smaller is better), \code{cpoFailures} (observations whose CPO INLA flags as
+unreliable) and, for the overall row, the log marginal likelihood \code{mlik}.
 }
 }
 \description{
@@ -47,6 +51,11 @@ observation, \code{residuals()} adds the residuals (observed value minus fitted
 mean) and \code{modelFit()} gives the criteria for model comparison.
 }
 \details{
+A latent equation (see \code{\link[=latentSpec]{latentSpec()}}) has no observations; \code{fittedValues(x, "eta")}
+gives the posterior of its latent field at its evaluation points (one row per
+combination of its variables in the data of the outcomes linked to it; no \code{observed}
+column; \code{type} makes no difference).
+
 Fitted means are on the scale of the response's mean: for \code{trials()}
 responses a proportion and for \code{exposure()} responses a rate (the observed
 value in column \code{observed} is on the same scale). Rows with a missing

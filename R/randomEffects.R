@@ -45,8 +45,8 @@ randomEffects <- function(x, ...) UseMethod("randomEffects")
 #' @export
 randomEffects.mvremModel <- function(x, response = NULL, ...) {
   needFit(x)
-  resp <- checkResponses(x, response)
   sr <- x$fit$summary.random
+  resp <- selectResponses(x, response)
   nm <- x$inla$naming
   rows <- list()
   for (r in intersect(resp, names(x$inla$random))) for (b in x$inla$random[[r]]) {
@@ -58,7 +58,7 @@ randomEffects.mvremModel <- function(x, response = NULL, ...) {
       s <- sr[[fields[e]]]
       # the rows of this effect, in the order of the group levels: matched by the labels
       # the model gave INLA (`"x1|t|S01"`), whatever order INLA or the data use
-      labels <- fillValue(nm$reValue, resp = r, term = termLabel(b$effects[e], nm), level = lev)
+      labels <- fillValue(nm$reValue, resp = r, term = inlaTermName(b$effects[e], nm), level = lev)
       k <- match(labels, as.character(s$ID))
       if (anyNA(k))
         stop("Random-effect labels of `", fields[e], "` not found in the INLA field: ",
@@ -69,23 +69,8 @@ randomEffects.mvremModel <- function(x, response = NULL, ...) {
         statTable(s[k, setdiff(names(s), "ID"), drop = FALSE]))
     }
   }
-  out <- if (length(rows)) do.call(rbind, rows) else
-    data.frame(response = character(), group = character(), term = character(),
-               level = character())
-  rownames(out) <- NULL
-  out
-}
-
-# The responses selected by a `response` argument (NULL = all), checked, in the order of
-# the model (the order in which the formulae were passed), whatever the order given.
-checkResponses <- function(x, response) {
-  all <- modelResponses(x)
-  if (is.null(response)) return(all)
-  bad <- setdiff(response, all)
-  if (length(bad))
-    stop("Unknown response(s): ", paste(bad, collapse = ", "), ". Responses of the model: ",
-         paste(all, collapse = ", "), ".", call. = FALSE)
-  all[all %in% response]
+  bindRows(rows, data.frame(response = character(), group = character(), term = character(),
+                            level = character()))
 }
 
 #' @rdname randomEffects
@@ -97,20 +82,20 @@ varianceComponents.mvremModel <- function(x, response = NULL, scale = c("sd", "v
   needFit(x)
   requireInla()
   scale <- match.arg(scale)
-  resp <- checkResponses(x, response)
+  resp <- selectResponses(x, response)
   tr <- if (scale == "sd") function(p) 1 / sqrt(p) else function(p) 1 / p
   sh <- x$fit$summary.hyperpar
   mh <- x$fit$marginals.hyperpar
-  sr <- x$fit$summary.random
 
-  # posterior summary (mean, sd, quantiles) of a transformed hyperparameter + its density
-  transformed <- function(name, f) {
+  # posterior summary (mean, sd, quantiles) of a transformed precision + its density;
+  # `internal` = the name of INLA's internal (log precision) marginal, the fallback
+  transformed <- function(name, f, internal = NA) {
     if (is.null(m <- mh[[name]])) return(NULL)
     tm <- tryCatch(suppressWarnings(INLA::inla.tmarginal(f, m)), error = function(e) NULL)
     if (is.null(tm) || !all(is.finite(tm[, 1L])) || !all(is.finite(tm[, 2L]))) {
       # a precision marginal spanning orders of magnitude (an SD near 0) is smoothed into
       # negative precisions by inla.tmarginal(): transform INLA's internal log precision
-      lm <- x$fit$internal.marginals.hyperpar[[sub("^Precision", "Log precision", name)]]
+      lm <- if (!is.na(internal)) x$fit$internal.marginals.hyperpar[[internal]]
       if (is.null(lm)) stop("Cannot transform the marginal of '", name, "'.", call. = FALSE)
       tm <- INLA::inla.tmarginal(function(th) f(exp(th)), lm)
     }
@@ -124,32 +109,37 @@ varianceComponents.mvremModel <- function(x, response = NULL, scale = c("sd", "v
     list(stats = unlist(s[c("mean", "sd", "q0.025", "q0.5", "q0.975")]), density = mh[[name]])
   }
   rows <- list(); dens <- list()
-  add <- function(r, group, block, parameter, effect, effect2, est) {
+  # `blockId` = the position of the block in `inl$random[[response]]` (NA for the residual
+  # rows): the structural key of a block; `block` is its display label (D4)
+  add <- function(r, group, blockId, block, parameter, effect, effect2, est) {
     if (is.null(est)) return(invisible())
     rows[[length(rows) + 1L]] <<- data.frame(
-      response = r, group = group, block = block, parameter = parameter, effect = effect,
-      effect2 = effect2, as.list(est$stats), stringsAsFactors = FALSE)
+      response = r, group = group, blockId = blockId, block = block, parameter = parameter,
+      effect = effect, effect2 = effect2, as.list(est$stats), stringsAsFactors = FALSE)
     dens[[length(dens) + 1L]] <<- est$density
   }
   covs <- list(); cors <- list()
+  known <- latentHyperRows(x$inla)
 
-  for (r in intersect(resp, names(x$inla$random))) for (b in x$inla$random[[r]]) {
+  for (r in intersect(resp, names(x$inla$random))) for (i in seq_along(x$inla$random[[r]])) {
+    b <- x$inla$random[[r]][[i]]
     k <- length(b$effects)
-    block <- sprintf("%s | %s [%s]", r, b$group, paste(b$effects, collapse = ", "))
-    correlated <- k > 1L   # one INLA field for all effects of a correlated block
-    precNames <- if (correlated) paste0("Precision for ", b$index[1L], " (component ", seq_len(k), ")") else
-      paste0("Precision for ", b$index)
+    block <- blockLabel(r, b$group, b$effects)
+    hr <- blockHyperRows(known, r, i)
+    prec <- hr[hr$short == "prec", , drop = FALSE]           # one row per effect, in order
     sdv <- rep(NA_real_, k)
     for (j in seq_len(k)) {
-      add(r, b$group, block, scale, b$effects[j], NA_character_, transformed(precNames[j], tr))
-      s1 <- transformed(precNames[j], function(p) 1 / sqrt(p))
+      add(r, b$group, i, block, scale, b$effects[j], NA_character_,
+          transformed(prec$.inla[j], tr, prec$internal[j]))
+      s1 <- transformed(prec$.inla[j], function(p) 1 / sqrt(p), prec$internal[j])
       if (!is.null(s1)) sdv[j] <- s1$stats[["mean"]]
     }
     cm <- diag(k)
-    if (correlated) for (i in seq_len(k - 1L)) for (j in (i + 1L):k) {
-      est <- plain(paste0("Rho", i, ":", j, " for ", b$index[1L]))
-      add(r, b$group, block, "correlation", b$effects[i], b$effects[j], est)
-      if (!is.null(est)) cm[i, j] <- cm[j, i] <- est$stats[["mean"]]
+    for (j in which(hr$short == "rho")) {                     # only a correlated block has them
+      est <- plain(hr$.inla[j])
+      add(r, b$group, i, block, "correlation", hr$effect[j], hr$effect2[j], est)
+      e1 <- match(hr$effect[j], b$effects); e2 <- match(hr$effect2[j], b$effects)
+      if (!is.null(est)) cm[e1, e2] <- cm[e2, e1] <- est$stats[["mean"]]
     }
     dimnames(cm) <- list(b$effects, b$effects)
     covs[[block]] <- outer(sdv, sdv) * cm
@@ -159,17 +149,16 @@ varianceComponents.mvremModel <- function(x, response = NULL, scale = c("sd", "v
 
   # residual / observation precision of the likelihoods
   ht <- hyperTable(x)
-  for (j in which(ht$type %in% "family" & ht$parameter %in% c("residual precision", "precision") &
-                    ht$response %in% resp))
-    add(ht$response[j], NA_character_, "residual", scale, "residual", NA_character_,
-        transformed(rownames(sh)[j], tr))
+  for (j in which(ht$type %in% "family" & ht$short %in% "prec" & ht$response %in% resp))
+    add(ht$response[j], NA_character_, NA_integer_, "residual", scale, "residual", NA_character_,
+        transformed(ht$.inla[j], tr))
 
-  table <- if (length(rows)) do.call(rbind, rows) else
-    data.frame(response = character(), group = character(), block = character(),
-               parameter = character(), effect = character(), effect2 = character())
+  table <- bindRows(rows, data.frame(response = character(), group = character(), blockId = integer(),
+                                     block = character(), parameter = character(), effect = character(),
+                                     effect2 = character()))
   # the random-effect blocks, then the residual SDs, each by response in the order of the model
   if (nrow(table)) {
-    k <- order(table$block == "residual", match(table$response, resp), seq_len(nrow(table)))
+    k <- responseOrder(x, table, first = table$block == "residual")
     table <- table[k, , drop = FALSE]
     dens <- dens[k]
   }
@@ -189,13 +178,16 @@ varianceComponentsOrNull <- function(x, what) {
   })
 }
 
+# The display label of a random-effect block in varianceComponents()$table / $cov / $cor.
+blockLabel <- function(r, group, effects) sprintf("%s | %s [%s]", r, group, paste(effects, collapse = ", "))
+
 #' @export
 print.mvremVarCov <- function(x, digits = 3, ...) {
   cat("Variance components (posterior summaries; scale = ", x$scale, ")\n\n", sep = "")
   t <- x$table
   num <- vapply(t, is.numeric, NA)
   t[num] <- lapply(t[num], signif, digits)
-  print(t[setdiff(names(t), c("group", "response"))], row.names = FALSE)
+  print(t[setdiff(names(t), c("group", "response", "blockId"))], row.names = FALSE)
   for (b in names(x$cov)) {
     if (nrow(x$cov[[b]]) < 2L) next
     cat("\n", b, ": covariance (from posterior mean SDs and correlations)\n", sep = "")

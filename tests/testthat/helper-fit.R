@@ -38,3 +38,11 @@ stubFitted <- function(m) {
   m$fit <- structure(list(), class = "inla")
   m
 }
+
+# Numbers replaced by `#` (not those glued to a letter such as q0.025) and runs of spaces
+# collapsed: the snapshots of estimates tables check the layout, not INLA's run-to-run digits
+# (which also change the column widths).
+maskNumbers <- function(s) {
+  s <- gsub("(?<![A-Za-z0-9.])-?[0-9]+(\\.[0-9]+)?(e[-+]?[0-9]+)?", "#", s, perl = TRUE)
+  gsub(" +", " ", s)
+}

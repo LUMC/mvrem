@@ -5,7 +5,7 @@ RUN mkdir -p /home/rstudio/project && \
     chown -R rstudio:rstudio /home/rstudio/project
 WORKDIR /home/rstudio/project
 
-RUN R -e "options(repos = c(INLA = 'https://inla.r-inla-download.org/R/testing', CRAN = 'https://cloud.r-project.org')); install.packages('INLA')" && \
+RUN R -e "options(repos = c(INLA = 'https://inla.r-inla-download.org/R/stable', CRAN = 'https://cloud.r-project.org')); install.packages('INLA')" && \
     chmod -R a+x /usr/local/lib/R/site-library/INLA/bin/linux && \
     R -e 'n = 100; a = 1; b = 1; tau = 100; z = rnorm(n); eta = a + b*z; scale = exp(rnorm(n)); prec = scale*tau; y = rnorm(n, mean = eta, sd = 1/sqrt(prec)); result = INLA::inla(y ~ 1+z, family = "gaussian", data = list(y=y, z=z)); summary(result)'
 

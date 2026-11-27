@@ -130,6 +130,10 @@ predict.mvremModel <- function(object, newdata, response = NULL, type = c("mean"
   method <- if (chosen == "auto") { if (hasConfig(object) && !length(opts)) "sample" else "refit" } else chosen
   if (method == "sample") checkSampleArgs(opts, nsamples, seed)
   pr <- predictionModel(object, newdata, response)
+  # E38: sampling does not follow a latent chain; an explicit "sample" says so first
+  if (chosen == "sample" && length(latentParts(object$forms)))
+    stop("`method = \"sample\"` does not support models with latent equations yet; use ",
+         "`method = \"refit\"`.", call. = FALSE)
   if (method == "sample") needConfig(object)
 
   preds <- NULL
@@ -224,8 +228,7 @@ predictionModel <- function(object, newdata, response) {
   weightOnly <- function(p) if (is.null(p$aux$weights)) character() else
     setdiff(all.vars(p$aux$weights), c(p$variables$covariate, p$variables$group, p$linkVariables,
                                        unlist(lapply(p$aux[names(p$aux) != "weights"], all.vars))))
-  needed <- function(p) setdiff(unique(c(p$variables$covariate, p$variables$group, p$variables$aux,
-                                         p$linkVariables)), weightOnly(p))
+  needed <- function(p) setdiff(formulaVariables(p, response = FALSE), weightOnly(p))
 
   surv <- names(object$inla$survival)[object$inla$survival]
   if (is.data.frame(newdata)) {
@@ -241,10 +244,10 @@ predictionModel <- function(object, newdata, response) {
              paste(vapply(eqs, function(p) paste0(p$response, ": ", paste(needed(p), collapse = ", ")), ""),
                    collapse = "; "), ".", call. = FALSE)
     }
-    response <- checkResponses(object, response)
+    response <- selectResponses(object, response, observed = TRUE)
     newdata <- stats::setNames(rep(list(newdata), length(response)), response)
   } else if (is.list(newdata) && !is.null(names(newdata)) && all(vapply(newdata, is.data.frame, NA))) {
-    response <- checkResponses(object, names(newdata))
+    response <- selectResponses(object, names(newdata), observed = TRUE)
     newdata <- lapply(newdata, plainDataFrame)
   } else {
     stop("`newdata` must be a data frame or a list of data frames named by response.", call. = FALSE)
@@ -263,7 +266,7 @@ predictionModel <- function(object, newdata, response) {
   # grouping variables / terms may take new values (new subjects); any other factor or
   # character column must keep to the values seen in the fit, else the rebuilt model gets
   # a new fixed-effect column that only the new rows use (estimated from the prior alone)
-  groupCols <- unique(unlist(lapply(eqs, function(p) c(p$variables$group, vapply(p$re, `[[`, "", "group")))))
+  groupCols <- unique(unlist(lapply(eqs, function(p) c(p$variables$group, reGroups(p)))))
   seenValues <- function(v) unique(unlist(lapply(prep, function(df)
     if (v %in% names(df)) { if (is.factor(df[[v]])) levels(df[[v]]) else unique(as.character(df[[v]])) })))
   # the model's data per response with the new rows appended (response missing)
@@ -293,14 +296,18 @@ predictionModel <- function(object, newdata, response) {
   x <- object
   x$data <- prepareData(object$forms, dataOut = dataOut, dataLong = dataLong, na.action = stats::na.pass)
   x$dataSummary <- summarizeData(object$forms, dataOut = dataOut, dataLong = dataLong)
-  x$inla <- buildInlaFormula(object$forms, x$data, object$inla$naming)
+  x$inla <- buildInlaFormula(object$forms, x$data, object$inla$naming,
+                             modelZeroLogPrec(object))
   list(model = x, newdata = newdata, response = response)
 }
 
 #' @rdname predict.mvremModel
 #' @param x The result of `predict()`.
+#' @param response Responses to plot (default: all predicted ones), in the order of the model.
 #' @param time,group Names of the time and grouping (subject) variables; default:
 #'   those of [plot.mvremModel()].
+#' @param ids Subjects (levels of `group`) to plot; default: all predicted subjects, and at most
+#'   `n` observed ones.
 #' @param data If `TRUE` (default), the observed data of the model are drawn in
 #'   grey behind the predictions (at most `n` subjects).
 #' @param n Maximum number of observed subjects drawn (default: 30, and 300 for
@@ -309,35 +316,43 @@ predictionModel <- function(object, newdata, response) {
 #' @param interactive `NULL` (default): an HTML widget with mouse-over
 #'   identification if the htmlwidgets package is installed, else base graphics;
 #'   `TRUE` / `FALSE` force one of them (see [htmlPlot()]).
-#' @param colorBy Name of a categorical variable of the data or the predictions (2 to 12
-#'   levels) colouring the observed and predicted subjects, as in [plot.mvremModel()]; the
-#'   widget offers all such variables in a dropdown whenever there are any.
+#' @param colorBy,shapeBy Name of a categorical variable of the data or the predictions (2 to 12
+#'   levels for colour, 2 to 6 for shape) colouring / shaping the observed and predicted
+#'   subjects, as in [plot.mvremModel()]; the widget offers all such variables in dropdowns
+#'   whenever there are any, and clicking a level in their legends hides / shows that subset.
 #' @export
-plot.mvremPredictions <- function(x, time = NULL, group = NULL, data = TRUE, n = NULL, ncol = NULL,
-                                  interactive = NULL, colorBy = NULL, ...) {
+plot.mvremPredictions <- function(x, response = NULL, time = NULL, group = NULL, data = TRUE, n = NULL,
+                                  ids = NULL, ncol = NULL, interactive = NULL, colorBy = NULL,
+                                  shapeBy = NULL, ...) {
   interactive <- useInteractive(interactive)
   n <- defaultSubjectCount(n, interactive)
   m <- attr(x, "model")
   eqs <- bothParts(m$forms)
-  prep <- bothParts(m$data)
-  resp <- orderResponses(m, x$response)
+  prep <- plotData(m)
+  resp <- intersect(selectResponses(m, response, observed = TRUE), x$response)
+  if (!length(resp)) stop("No predictions for the response(s) given.", call. = FALSE)
   time <- plotTimeVariable(eqs, prep, time, timeVariable(m))
   group <- plotGroupVariable(eqs, prep, group)
-  if (!time %in% names(x)) stop("`time` = '", time, "' is not a column of the predictions.", call. = FALSE)
+  checkColumnName(time, "`time`", list(x), what = "the predictions")
   linear <- identical(attr(x, "type"), "linear")
   # observed data: the model's rows without the appended prediction rows; not drawn for
   # predictions of the linear predictor, which is on another scale than the data
-  obs <- if (isTRUE(data) && !linear) plotLinesData(m, resp, time, group, n, NULL, fitted = FALSE)$panels
-  # colorBy: the categorical variables of the data and of the new rows (a new clinic is a level)
-  colors <- colorSpec(c(prep, list(x[setdiff(names(x), "response")])), colorBy)
+  obs <- if (isTRUE(data) && !linear) plotLinesData(m, resp, time, group, n, ids, fitted = FALSE)$panels
+  # colorBy / shapeBy: the categorical variables of the data and of the new rows (a new clinic is a level)
+  groups <- groupSpec(c(prep, list(x[setdiff(names(x), "response")])), colorBy, shapeBy)
 
   panels <- lapply(seq_along(resp), function(i) {
     r <- resp[i]
     d <- x[x$response == r, , drop = FALSE]
     gg <- subjectOfRows(d, group, fill = "prediction")
+    if (!is.null(ids)) {                      # only these subjects' predictions
+      d <- d[gg %in% as.character(ids), , drop = FALSE]
+      gg <- gg[gg %in% as.character(ids)]
+      if (!nrow(d)) return(NULL)
+    }
     subjects <- subjectSeries(unique(gg), gg, TRUE, d[[time]],
                               list(mean = d$mean, lo = d$q0.025, hi = d$q0.975),
-                              cv = colorColumns(d, colors))
+                              cv = groupColumns(d, groups))
     o <- if (!is.null(obs)) obs[[i]]
     # (subjects without an observed value of this response have empty series: dropped)
     observed <- if (!is.null(o) && !isTRUE(o$missing)) Filter(function(s) length(s$x) > 0L, o$subjects)
@@ -347,32 +362,32 @@ plot.mvremPredictions <- function(x, time = NULL, group = NULL, data = TRUE, n =
          xlim = range(c(d[[time]], unlist(lapply(observed, `[[`, "x"))), finite = TRUE),
          ylim = range(c(d$q0.025, d$q0.975, unlist(lapply(observed, `[[`, "y"))), finite = TRUE))
   })
+  panels <- Filter(Negate(is.null), panels)
+  if (!length(panels)) stop("No predictions for the subject(s) in `ids`.", call. = FALSE)
   panels <- shareXlim(panels)
   ncol <- autoNcol(length(panels), ncol)
   legend <- predictionsLegend(!is.null(obs))
-  if (isTRUE(interactive)) return(htmlPredictions(panels, ncol, legend, group, colors))
+  if (isTRUE(interactive)) return(htmlPredictions(panels, ncol, legend, group, groups))
 
-  op <- panelLayout(length(panels), ncol)
-  on.exit(graphics::par(op), add = TRUE)
   colData <- plotColors$base$subjectFaint
   colPred <- plotColors$accent
-  for (i in seq_along(panels)) {
+  withPanels(length(panels), ncol, function(i) {
     pn <- panels[[i]]
-    graphics::plot(pn$xlim, pn$ylim, type = "n", xlab = pn$xlab, ylab = pn$ylab, main = pn$title, cex.main = 0.95)
+    panelFrame(pn)
     for (s in pn$observed) {
-      sc <- seriesColors(s, colors, colData, alpha = 0.5)
+      sc <- seriesStyle(s, groups, colData, alpha = predictionFade)
       graphics::lines(s$x, s$y, col = sc$line, lwd = 0.8)
-      graphics::points(s$x, s$y, col = sc$points, pch = 16, cex = 0.5 * if (is.null(s$size)) 1 else s$size)
+      graphics::points(s$x, s$y, col = sc$points, pch = sc$pch, cex = 0.5 * if (is.null(s$size)) 1 else s$size)
     }
     for (s in pn$subjects) {
-      sc <- seriesColors(s, colors, colPred, alpha = 1)
+      sc <- seriesStyle(s, groups, colPred, alpha = 1)
       graphics::lines(s$x, s$lo, col = sc$line, lwd = 1, lty = 3)
       graphics::lines(s$x, s$hi, col = sc$line, lwd = 1, lty = 3)
       graphics::lines(s$x, s$mean, col = sc$line, lwd = 2)
-      graphics::points(s$x, s$mean, col = sc$points, pch = 16, cex = 0.6)
+      graphics::points(s$x, s$mean, col = sc$points, pch = sc$pch, cex = 0.6)
     }
-    if (i == 1L) { baseLegend(legend); colorLegend(colors) }
-  }
+    if (i == 1L) { baseLegend(legend); groupLegends(groups) }
+  })
   invisible(x)
 }
 
@@ -384,19 +399,23 @@ predictionsLegend <- function(haveObs) {
          legendEntry("predInt", "95% interval", w$accentLight, "2 3", plotColors$accent, 1, 3)))
 }
 
+# Opacity of the coloured observations behind predictions (colorBy): faint, so that the predicted
+# mean and bounds (opaque) stand out; used by the widget (`fade`) and the base plot.
+predictionFade <- 0.2
+
 # widget of plot.mvremPredictions(): observed lines (grey), predicted mean (solid blue) and
 # 95% bounds (dotted light blue, without points) per subject, linked by subject id. The
 # prediction lines carry their colours, as the widget's defaults are those of observed /
 # fitted lines.
-htmlPredictions <- function(panels, ncol, legend, group, colors = NULL) {
+htmlPredictions <- function(panels, ncol, legend, group, groups = NULL) {
   ps <- lapply(panels, function(pn) {
     lines <- list()
     for (s in pn$observed)
       lines[[length(lines) + 1L]] <- c(list(id = s$id, kind = "obs", x = r5(s$x), y = r5(s$y)),
                                        if (!is.null(s$size)) list(size = r5(s$size)),
-                                       if (length(s$cv)) list(cv = s$cv))               # colorBy
+                                       if (length(s$cv)) list(cv = s$cv, fade = predictionFade))   # colorBy / shapeBy
     for (s in pn$subjects) {
-      cv <- if (length(s$cv)) list(cv = s$cv)
+      cv <- if (length(s$cv)) list(cv = s$cv, fade = 1)   # predictions: opaque in their colour
       lines[[length(lines) + 1L]] <- c(list(id = s$id, kind = "predInt", color = plotColors$widget$accentLight, dash = "2 3",
                                             points = FALSE, x = r5(s$x), y = r5(s$lo)), cv)
       lines[[length(lines) + 1L]] <- c(list(id = s$id, kind = "predInt", color = plotColors$widget$accentLight, dash = "2 3",
@@ -404,8 +423,7 @@ htmlPredictions <- function(panels, ncol, legend, group, colors = NULL) {
       lines[[length(lines) + 1L]] <- c(list(id = s$id, kind = "pred", color = plotColors$accent, width = 2,
                                             x = r5(s$x), y = r5(s$mean)), cv)
     }
-    c(list(title = pn$title, xlab = pn$xlab, ylab = pn$ylab, xlim = r5(pn$xlim), ylim = r5(pn$ylim),
-           connect = TRUE, lines = lines), if (!is.null(pn$note)) list(note = pn$note))
+    widgetPanel(pn, lines)
   })
-  htmlPlot(ps, ncol, widgetLegend(legend), linked = TRUE, search = subjectSearchLabel(group), colorBy = colors)
+  subjectWidget(ps, ncol, legend, group, groups)
 }

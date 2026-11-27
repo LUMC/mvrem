@@ -49,6 +49,13 @@ Node.prototype.appendChild = function (c) {
   this.children.push(c);
   return c;
 };
+Node.prototype.insertBefore = function (c, ref) {
+  if (c.parentNode) c.parentNode.removeChild(c);
+  var i = this.children.indexOf(ref);
+  c.parentNode = this;
+  if (i < 0) this.children.push(c); else this.children.splice(i, 0, c);
+  return c;
+};
 Node.prototype.removeChild = function (c) {
   var i = this.children.indexOf(c);
   if (i >= 0) this.children.splice(i, 1);

@@ -21,13 +21,16 @@
 
 \method{plot}{mvremPredictions}(
   x,
+  response = NULL,
   time = NULL,
   group = NULL,
   data = TRUE,
   n = NULL,
+  ids = NULL,
   ncol = NULL,
   interactive = NULL,
   colorBy = NULL,
+  shapeBy = NULL,
   ...
 )
 }
@@ -43,10 +46,7 @@ likelihood of an observed response, so it does not change a prediction; a
 variable used only by \code{weights()} and missing in \code{newdata} is set to 1 in the
 new rows.}
 
-\item{response}{Responses to predict when \code{newdata} is one data frame
-(default: every response whose variables are all in \code{newdata}). The
-result lists the responses in the order the formulae were passed to
-\code{\link[=jsm]{jsm()}}, whatever the order of \code{response} or of a \code{newdata} list.}
+\item{response}{Responses to plot (default: all predicted ones), in the order of the model.}
 
 \item{type}{\code{"mean"} (default): the fitted mean of the response (proportion /
 rate scale for \code{trials()} / \code{exposure()} responses); \code{"linear"}: the linear
@@ -76,15 +76,19 @@ grey behind the predictions (at most \code{n} subjects).}
 \item{n}{Maximum number of observed subjects drawn (default: 30, and 300 for
 the interactive widget).}
 
+\item{ids}{Subjects (levels of \code{group}) to plot; default: all predicted subjects, and at most
+\code{n} observed ones.}
+
 \item{ncol}{Number of panel columns (default: automatic).}
 
 \item{interactive}{\code{NULL} (default): an HTML widget with mouse-over
 identification if the htmlwidgets package is installed, else base graphics;
 \code{TRUE} / \code{FALSE} force one of them (see \code{\link[=htmlPlot]{htmlPlot()}}).}
 
-\item{colorBy}{Name of a categorical variable of the data or the predictions (2 to 12
-levels) colouring the observed and predicted subjects, as in \code{\link[=plot.mvremModel]{plot.mvremModel()}}; the
-widget offers all such variables in a dropdown whenever there are any.}
+\item{colorBy, shapeBy}{Name of a categorical variable of the data or the predictions (2 to 12
+levels for colour, 2 to 6 for shape) colouring / shaping the observed and predicted
+subjects, as in \code{\link[=plot.mvremModel]{plot.mvremModel()}}; the widget offers all such variables in dropdowns
+whenever there are any, and clicking a level in their legends hides / shows that subset.}
 }
 \value{
 \code{predict()}: a data frame of class \code{mvremPredictions} with \code{response},

@@ -90,7 +90,7 @@ test_that("plot(): n = NULL defaults to 30 subjects for base graphics and 300 fo
 
 test_that("plotLinesData(): panels of an unfitted model, in the order passed, finite ordered limits", {
   m <- fxModel("multi", fit = FALSE)
-  d <- plotLinesData(m, NULL, NULL, NULL, 30, NULL, TRUE)
+  d <- linesData(m)
   expect_false(d$haveFit)
   expect_equal(d$time, "t")
   expect_equal(d$group, "id")
@@ -136,7 +136,7 @@ test_that("plotLinesData(): a response with trials() and exposure() names both d
   long <- fxData()$long
   m <- jsm(list(k | trials(n) + exposure(pt) ~ 1 + t + scaled(x1), x1 ~ 1 + t + (1 | id)),
            data = long, family = list(k = inlaFamily("binomial")), fit = FALSE)
-  d <- plotLinesData(m, NULL, NULL, NULL, 30, NULL, TRUE)
+  d <- linesData(m)
   expect_equal(d$panels[[1]]$ylab, "k / n / pt")
   s1 <- d$panels[[1]]$subjects[[1]]
   rows <- which(long$id == s1$id)
@@ -146,14 +146,14 @@ test_that("plotLinesData(): a response with trials() and exposure() names both d
 test_that("plotLinesData(): n, ids and group select the subjects", {
   m <- fxModel("beta", fit = FALSE)
   ids <- allIds()
-  one <- plotLinesData(m, NULL, NULL, NULL, 1, NULL, TRUE)
+  one <- linesData(m, n = 1)
   expect_equal(subjectIds(one$panels[[1]]), ids[1])
-  two <- plotLinesData(m, NULL, NULL, NULL, 2, NULL, TRUE)
+  two <- linesData(m, n = 2)
   expect_equal(subjectIds(two$panels[[1]]), ids[c(1, length(ids))])   # evenly spaced: first and last
-  big <- plotLinesData(m, NULL, NULL, NULL, 1000, NULL, TRUE)
+  big <- linesData(m, n = 1000)
   expect_equal(subjectIds(big$panels[[1]]), ids)                        # all of them, no duplicates
   for (n in c(3, 7, 30)) {
-    p <- plotLinesData(m, NULL, NULL, NULL, n, NULL, TRUE)$panels[[1]]
+    p <- linesData(m, n = n)$panels[[1]]
     expect_length(p$subjects, n)
     expect_false(anyDuplicated(subjectIds(p)) > 0)
   }
@@ -163,7 +163,7 @@ test_that("plotLinesData(): n, ids and group select the subjects", {
   # ids not in the data are dropped silently; none known -> no subjects, limits from all rows
   mixed <- plotLinesData(m, NULL, NULL, NULL, 30, c("S02", "nobody"), TRUE)
   expect_equal(subjectIds(mixed$panels[[1]]), "S02")
-  none <- plotLinesData(m, NULL, NULL, NULL, 30, "nobody", TRUE)
+  none <- linesData(m, ids = "nobody", n = 30)
   expect_length(none$panels[[1]]$subjects, 0)
   expect_equal(none$panels[[1]]$xlim, range(fxData()$long$t))
 })
@@ -182,19 +182,19 @@ test_that("plotLinesData(): response filter and explicit time / group, with clea
   expect_equal(vapply(d$panels, `[[`, "", "response"), c("k", "x2"))   # in the order of the model
   expect_error(plotLinesData(m, c("k", "zzz"), NULL, NULL, 5, NULL, TRUE), "Unknown response.*zzz")
   # explicit time / group equal to the defaults change nothing
-  e <- plotLinesData(m, NULL, "t", "id", 5, NULL, TRUE)
+  e <- linesData(m, time = "t", group = "id", n = 5)
   expect_equal(e$time, "t")
   expect_equal(e$group, "id")
-  expect_equal(e$panels, plotLinesData(m, NULL, NULL, NULL, 5, NULL, TRUE)$panels)
-  expect_error(plotLinesData(m, NULL, "nope", NULL, 5, NULL, TRUE), "`time`.*'nope'.*not a variable")
+  expect_equal(e$panels, linesData(m, n = 5)$panels)
+  expect_error(linesData(m, time = "nope", n = 5), "`time`.*'nope'.*not a variable")
   expect_error(plotLinesData(m, NULL, c("t", "n"), NULL, 5, NULL, TRUE), "one variable")
-  expect_error(plotLinesData(m, NULL, NULL, "nope", 5, NULL, TRUE), "`group`.*'nope'.*not a variable")
+  expect_error(linesData(m, group = "nope", n = 5), "`group`.*'nope'.*not a variable")
   expect_error(plotLinesData(m, NULL, NULL, c("id", "grp"), 5, NULL, TRUE), "one variable")
 })
 
 test_that("plotLinesData(): a time variable present in only some equations gives empty panels", {
   m <- fxModel("multi", fit = FALSE)
-  dp <- plotLinesData(m, NULL, "pt", NULL, 5, NULL, TRUE)
+  dp <- linesData(m, time = "pt", n = 5)
   miss <- vapply(dp$panels, function(p) isTRUE(p$missing), NA)
   expect_equal(miss, c(TRUE, FALSE, TRUE, TRUE))          # pt: exposure of cnt only
   expect_match(dp$panels[[1]]$title, "^k:.*`pt`")
@@ -204,17 +204,17 @@ test_that("plotLinesData(): a time variable present in only some equations gives
 
 test_that("plotLinesData(): another grouping variable (site) gives one line per level where it is used", {
   m <- fxModel("priors", fit = FALSE)
-  d <- plotLinesData(m, NULL, "t", "site", 30, NULL, TRUE)
+  d <- linesData(m, time = "t", group = "site", n = 30)
   expect_equal(d$group, "site")
   sites <- levels(fxData()$long$site)
   yg <- d$panels[[1]]                                  # the outcome has the random effect on site
   expect_equal(yg$response, "yg")
   expect_equal(subjectIds(yg), sites)
   expect_true(all(vapply(yg$subjects, function(s) length(s$x) == sum(fxData()$long$site == s$id), NA)))
-  # the longitudinal equations do not use site: their prepared data have no such column, so
-  # no subject lines (the smooth mean of all rows is still there)
+  # the longitudinal formulae do not use site, but the data have it (a display-only column,
+  # E30): one line per site there too
   for (pn in d$panels[-1]) {
-    expect_length(pn$subjects, 0)
+    expect_equal(subjectIds(pn), sites)
     expect_true(pn$grouped)
     expect_named(pn$smoothObs, c("x", "y"))
   }
@@ -249,7 +249,7 @@ test_that("plotLinesData(): a non-numeric time variable gives a clear error", {
   # B10: all plot functions resolve `time` through plotTimeVariable(), which must reject
   # a factor / character variable itself instead of failing later inside range()
   m <- fxModel("beta", fit = FALSE)
-  expect_error(plotLinesData(m, NULL, "id", NULL, 5, NULL, TRUE), "`time` = 'id' must be a numeric variable")
+  expect_error(linesData(m, time = "id", n = 5), "`time` = 'id' must be a numeric variable")
   expect_error(plot(m, time = "id", interactive = FALSE), "`time` = 'id' must be a numeric variable")
   expect_error(plot(m, time = "id", interactive = FALSE), "factor")
   expect_error(plot(m, time = "nope", interactive = FALSE), "not a variable of the model's data")
@@ -262,7 +262,7 @@ test_that("plotLinesData(): a non-numeric time variable gives a clear error", {
 
 test_that("plotLinesData(): fitted values of a fitted model, or none with fitted = FALSE", {
   m <- fxModel("multi")
-  d <- plotLinesData(m, NULL, NULL, NULL, 30, NULL, TRUE)
+  d <- linesData(m)
   expect_true(d$haveFit)
   for (pn in d$panels) {
     expect_true(pn$useFit)
@@ -279,32 +279,65 @@ test_that("plotLinesData(): fitted values of a fitted model, or none with fitted
   s <- d$panels[[3]]$subjects[[1]]
   rows <- which(fv$id == s$id)
   expect_equal(s$fit, fv$mean[rows][order(fv$t[rows])])
-  nf <- plotLinesData(m, NULL, NULL, NULL, 30, NULL, FALSE)
+  nf <- linesData(m, fitted = FALSE)
   expect_false(nf$haveFit)
   expect_false(any(vapply(nf$panels, `[[`, NA, "useFit")))
 })
 
-test_that("plot() of a survival model: the survival outcome is an empty panel", {
+test_that("plot() of a survival model: Kaplan-Meier and model curves against the survival time (E31)", {
   m <- fxModel("surv")
-  d <- plotLinesData(m, NULL, NULL, NULL, 30, NULL, TRUE)
+  d <- linesData(m)
   expect_equal(vapply(d$panels, `[[`, "", "response"), c("time", "x1"))
-  expect_true(d$panels[[1]]$missing)
-  expect_match(d$panels[[1]]$title, "^time:.*survival.*not plotted")
-  expect_false(d$panels[[2]]$missing)
+  sp <- d$panels[[1]]
+  expect_true(sp$survival)
+  expect_false(sp$missing)
+  expect_equal(sp$xlab, "time")
+  expect_equal(sp$ylim, c(0, 1))
+  expect_equal(sp$xlim, c(0, max(fxData()$surv$time)))
+  expect_false(isTRUE(all.equal(sp$xlim, d$panels[[2]]$xlim)))   # not shared with the marker's time axis
+  expect_setequal(unique(sp$curves$curve), c("km", "model"))
+  expect_length(sp$censored, sum(fxData()$surv$status == 0))
+  expect_match(sp$note, "posterior means")                       # no config: plug-in, no band
   expect_true(d$panels[[2]]$useFit)
-  only <- plotLinesData(m, "time", NULL, NULL, 30, NULL, TRUE)
-  expect_length(only$panels, 1)
-  expect_true(only$panels[[1]]$missing)
+  # without a fit: Kaplan-Meier only
+  nf <- plotLinesData(fxModel("surv", fit = FALSE), NULL, NULL, NULL, 30, NULL, TRUE)
+  expect_equal(unique(nf$panels[[1]]$curves$curve), "km")
+  expect_null(nf$panels[[1]]$note)
   withNullDevice({
     expect_identical(plot(m, interactive = FALSE), m)
-    expect_identical(plot(m, "time", interactive = FALSE), m)    # only the empty panel, no legend
+    expect_identical(plot(m, "time", interactive = FALSE), m)    # only the survival panel
     expect_identical(plot(fxModel("surv", fit = FALSE), interactive = FALSE), fxModel("surv", fit = FALSE))
   })
   skipNoWidgets()
   w <- expectCleanWidget(plot(m, interactive = TRUE))
-  expect_true(w$x$panels[[1]]$empty)
-  expect_equal(w$x$panels[[1]]$title, d$panels[[1]]$title)
-  expect_true(length(w$x$panels[[2]]$lines) > 0)
+  wp <- w$x$panels[[1]]
+  expect_null(wp$empty)
+  expect_equal(vapply(wp$curves, `[[`, "", "kind"), c("km", "surv"))
+  expect_true(all(vapply(wp$lines, function(l) l$kind == "censored" && isTRUE(l$hollow), NA)))
+  # a censored subject is linked to its lines in the marker panel (same id)
+  expect_true(all(vapply(wp$lines, `[[`, "", "id") %in% vapply(w$x$panels[[2]]$lines, `[[`, "", "id")))
+  kinds <- vapply(w$x$legend, `[[`, "", "kind")
+  expect_true(all(c("km", "censored", "surv") %in% kinds))
+  expect_false("survInt" %in% kinds)                             # no band without config
+  res <- expectWidgetJs(w)
+})
+
+test_that("plot() of a survival model: curves per level of colorBy, a band with config = TRUE (E31)", {
+  m <- fxSurvivalArm()
+  d <- linesData(m, colorBy = "arm")
+  sp <- d$panels[[1]]
+  expect_equal(sp$by, "arm")
+  expect_setequal(unique(sp$curves$level), c("A", "B"))
+  expect_match(sp$note, "95% band from 200 posterior draws")
+  expect_no_error(withNullDevice(plot(m, colorBy = "arm", interactive = FALSE)))
+  skipNoWidgets()
+  w <- expectCleanWidget(plot(m, colorBy = "arm", interactive = TRUE))
+  cv <- lapply(w$x$panels[[1]]$curves, `[[`, "cv")
+  expect_setequal(unlist(lapply(cv, `[[`, "arm")), c("A", "B"))
+  expect_equal(sort(unique(vapply(w$x$panels[[1]]$curves, `[[`, "", "kind"))), c("km", "surv", "survInt"))
+  expect_true("survInt" %in% vapply(w$x$legend, `[[`, "", "kind"))
+  res <- expectWidgetJs(w)
+  expect_true(res$levelHides)                                    # a level's curves and marks hide with it
 })
 
 test_that("plot(): base graphics on unfitted and fitted models, all argument variants", {
@@ -334,7 +367,7 @@ test_that("plot() widget: panels, legend, linking and search of a fitted model",
   w <- expectCleanWidget(plot(m, interactive = TRUE))
   x <- w$x
   expect_true(x$linked)
-  expect_equal(x$search, "id id")              # "<group> id"
+  expect_equal(x$search, "id")                 # the grouping variable
   expect_equal(x$ncol, 2L)                     # 4 panels -> 2 columns
   expect_match(panelTitles(w)[1], "^k .*outcome")
   expect_match(panelTitles(w)[2], "^cnt .*outcome")
@@ -379,10 +412,10 @@ test_that("plot() widget: explicit time / group, group = NA and a time variable 
   e <- plot(m, time = "t", group = "id", interactive = TRUE)
   expect_equal(e$x, plot(m, interactive = TRUE)$x)
   ws <- expectCleanWidget(plot(fxModel("priors"), group = "site", interactive = TRUE))
-  expect_equal(ws$x$search, "site id")
+  expect_equal(ws$x$search, "site")
   expect_equal(lineIds(ws$x$panels[[1]], "obs"), levels(fxData()$long$site))
   ng <- expectCleanWidget(plot(m, group = NA, interactive = TRUE))
-  expect_equal(ng$x$search, "subject id")
+  expect_equal(ng$x$search, "subject")
   expect_false(ng$x$panels[[1]]$connect)
   expect_equal(lineIds(ng$x$panels[[1]]), "all")
   wp <- expectCleanWidget(plot(m, time = "pt", interactive = TRUE))
@@ -435,7 +468,7 @@ test_that("htmlLines(): missing panels, hline, connect and renamed kinds", {
   expect_equal(p$lines[[1]]$kind, "res")
   expect_equal(p$curves[[1]]$kind, "resMean")
   expect_equal(vapply(w$x$legend, `[[`, "", "label"), c("R", "RM"))
-  expect_equal(w$x$search, "id id")
+  expect_equal(w$x$search, "id")
 })
 
 # ---- plotModel() -----------------------------------------------------------------------------
@@ -496,7 +529,7 @@ test_that("plotRandomEffects(): one panel per response, term and group, linked b
   w <- expectCleanWidget(plotRandomEffects(m, interactive = TRUE))
   expect_equal(panelTitles(w), c("x1: (Intercept) | id", "x1: t | id", "x2: (Intercept) | id"))
   expect_true(w$x$linked)
-  expect_equal(w$x$search, "subject id")
+  expect_equal(w$x$search, "subject")
   expect_equal(w$x$ncol, 2L)
   re <- randomEffects(m)
   for (pn in w$x$panels) {
@@ -906,7 +939,7 @@ test_that("plotResiduals() widget: residual lines with hline 0, legend without f
   w <- expectCleanWidget(plotResiduals(m, interactive = TRUE))
   expect_equal(w$x$ncol, 2L)
   expect_true(w$x$linked)
-  expect_equal(w$x$search, "id id")
+  expect_equal(w$x$search, "id")
   expect_equal(legendKinds(w), c("res", "resMean"))
   for (pn in w$x$panels) {
     expect_equal(pn$hline, 0)
@@ -918,7 +951,7 @@ test_that("plotResiduals() widget: residual lines with hline 0, legend without f
   expect_equal(lineIds(wf$x$panels[[1]]), c("S01", "S02"))
   expect_false(wf$x$panels[[1]]$connect)
   ws <- expectCleanWidget(plotResiduals(fxModel("priors"), group = "site", interactive = TRUE))
-  expect_equal(ws$x$search, "site id")
+  expect_equal(ws$x$search, "site")
   expect_equal(lineIds(ws$x$panels[[1]]), levels(fxData()$long$site))
   expectCleanWidget(plotResiduals(fxModel("surv"), interactive = TRUE))
 })
@@ -948,7 +981,7 @@ test_that("plot.mvremPredictions() widget: a predicted line and two bounds per s
   newIds <- unique(fxNewdata$id)                               # three new subjects and S01
   w <- expectCleanWidget(plot(p, interactive = TRUE))
   expect_true(w$x$linked)
-  expect_equal(w$x$search, "id id")
+  expect_equal(w$x$search, "id")
   expect_equal(w$x$ncol, 2L)
   expect_match(panelTitles(w)[1], "^k .*outcome")
   expect_match(panelTitles(w)[3], "^x1 .*longitudinal")
@@ -992,7 +1025,7 @@ test_that("plot.mvremPredictions() widget: n, data = FALSE and the linear-predic
 test_that("plot.mvremPredictions() widget: group = NA pools the predictions into one line", {
   skipNoWidgets()
   wg <- expectCleanWidget(plot(fxPredict(), group = NA, interactive = TRUE))
-  expect_equal(wg$x$search, "subject id")
+  expect_equal(wg$x$search, "subject")
   expect_equal(lineIds(wg$x$panels[[1]], "pred"), "prediction")
   expect_equal(lineIds(wg$x$panels[[1]], "obs"), "all")
 })
@@ -1039,6 +1072,15 @@ test_that("mvremPlot.js: renders every widget kind in node and its interactions 
       expect_gte(r$searchMatches, 1)
       expect_true(r$dimAfterSearch, label = paste(nm, "search dims"))
       expect_false(r$dimAfterClear, label = paste(nm, "search cleared"))
+      # the dropdown of matches: a pick highlights exactly that subject
+      expect_true(r$dropdownShown, label = paste(nm, "dropdown"))
+      expect_gte(r$dropdownItems, 1)
+      expect_equal(r$pickedMatches, 1, label = paste(nm, "picked"))
+      expect_true(r$dropdownClosedAfterPick)
+      expect_true(r$activeAfterDown)
+      expect_equal(r$enterMatches, 1)
+      expect_true(r$dropdownClosedByEscape)
+      expect_true(r$dropdownHiddenWhenEmpty)
     }
   }
   # the tooltip names the panel, the subject and the values
@@ -1082,7 +1124,7 @@ test_that("shareXlim(): the panels of a plot against time share one x range", {
   expect_identical(shareXlim(pn[1]), pn[1])
   # the equations of a model: one range over all panels, also for residuals against time
   m <- fxModel("multi", fit = FALSE)
-  d <- plotLinesData(m, NULL, NULL, NULL, 30, NULL, TRUE)
+  d <- linesData(m)
   lims <- lapply(Filter(function(p) !isTRUE(p$missing), d$panels), `[[`, "xlim")
   expect_true(length(unique(lims)) == 1L)
 })
@@ -1096,7 +1138,7 @@ test_that("plotLinesData(): INLA's predictions of missing observations are open 
   m <- suppressMessages(jsm(list(y ~ t + scaled(x1), x1 ~ t + (1 + t | id)), data = d,
                             family = list(y = betaFamily())))
   skip_if(is.null(inlaFit(m)), "INLA fit failed")
-  pd <- plotLinesData(m, NULL, NULL, NULL, 1000, NULL, TRUE)
+  pd <- linesData(m, n = 1000)
   px <- pd$panels[[2]]
   expect_equal(px$response, "x1")
   pred <- px$predicted
@@ -1127,9 +1169,7 @@ test_that("plotLinesData(): INLA's predictions of missing observations are open 
   expect_length(ln, length(pred))
   expect_true(all(vapply(ln, function(l) isTRUE(l$hollow), NA)))
   expect_true(any(vapply(w$x$legend, function(e) identical(e$shape, "circle"), NA)))
-  skip_if(!hasNode(), "node not available")
-  res <- runWidgetJs(list(w = w))$w
-  expect_true(res$ok, label = paste(res$error, res$stack))
+  res <- expectWidgetJs(w)
 })
 
 test_that("plotModel(): a fitted model's boxes show the SDs, correlations and residual SD (E6)", {
@@ -1153,62 +1193,182 @@ test_that("plotModel(): a fitted model's boxes show the SDs, correlations and re
   expect_no_error(withNullDevice(plotModel(m)))
 })
 
-test_that("colorBy: candidates, checks, series values, base and widget renderers", {
+test_that("groupSpec(): colour / shape candidates, levels, checks", {
   m <- fxModel("priors", fit = FALSE)
-  prep <- bothParts(m$data)
-  expect_equal(colorCandidates(prep), "site")                    # id has too many levels
-  expect_error(colorSpec(prep, "id"), "`colorBy` must be one of .*: site\\.")
-  expect_error(colorSpec(prep, 1), "`colorBy` must be one of")
-  sp <- colorSpec(prep, "site")
+  prep <- plotData(m)
+  expect_true("site" %in% groupCandidates(prep))                 # id has too many levels
+  expect_false("id" %in% groupCandidates(prep))
+  expect_error(groupSpec(prep, "id"), "`colorBy` must be one of .*site")
+  expect_error(groupSpec(prep, 1), "`colorBy` must be one of")
+  expect_error(groupSpec(prep, shapeBy = "id"), "`shapeBy` must be one of .*2 to 6 levels")
+  sp <- groupSpec(prep, "site", "site")
   expect_equal(sp$levels$site, c("A", "B", "C", "D"))
+  expect_equal(sp$shapes, names(plotShapes))
   expect_equal(colorOf(c("B", NA, "Z"), sp, "grey"), c(plotColors$groups[2], "grey", "grey"))
-  expect_equal(colorOf("B", colorSpec(prep), "grey"), "grey")    # nothing selected
-  d <- plotLinesData(m, NULL, NULL, NULL, 30, NULL, TRUE, colorBy = "site")
-  expect_equal(d$colors$selected, "site")
+  expect_equal(colorOf("B", groupSpec(prep), "grey"), "grey")    # nothing selected
+  expect_equal(pchOf(c("A", "C", NA), sp, 3), c(16, 17, 16))
+  expect_equal(pchOf(NULL, groupSpec(prep), 2), c(16, 16))
+  # shape: at most 6 levels
+  big <- list(data.frame(v = letters[1:8], stringsAsFactors = FALSE))
+  expect_equal(groupSpec(big)$vars, "v")
+  expect_length(groupSpec(big)$shapeVars, 0L)
+  expect_error(groupSpec(big, shapeBy = "v"), "`shapeBy` must be one of .*\\(none in this model\\)")
+})
+
+test_that("displayColumns() / plotData(): categorical columns no formula uses reach the plots only", {
+  d <- fxGridData(20, 0:2)                                       # id: 20 levels
+  d$dev <- rep(c("P", "Q", "Q"), 20)                              # varies within subjects
+  d$ward <- factor(rep(c("w1", "w2"), each = 30))                 # constant within subjects
+  d$note <- sprintf("n%02d", seq_len(nrow(d)))                    # too many levels: not kept
+  d$x <- rnorm(nrow(d)); d$y <- rnorm(nrow(d))
+  d$x[2] <- NA
+  m <- jsm(list(y ~ t + scaled(x), x ~ t + (1 | id)), data = d, fit = FALSE)
+  expect_equal(names(m$display$long$x), c("dev", "ward"))
+  expect_equal(nrow(m$display$long$x), nrow(m$data$long$x))
+  expect_false("dev" %in% names(m$data$long$x))                   # INLA never sees them
+  expect_false(any(grepl("dev|ward", deparse(inlaFormula(m)))))
+  prep <- plotData(m)
+  expect_equal(prep$x$dev, d$dev)
+  expect_true(is.factor(prep$x$ward))
+  # row-aligned also when na.omit drops rows
+  m2 <- jsm(list(y ~ t + scaled(x), x ~ t + (1 | id)), data = d, fit = FALSE, na.action = na.omit)
+  expect_equal(plotData(m2)$x$dev, d$dev[-2])
+  # objects without display columns (built before E30) still plot
+  m0 <- m; m0$display <- NULL
+  expect_identical(plotData(m0), bothParts(m$data))
+  sp <- groupSpec(plotData(m), "ward", "dev")
+  expect_equal(sp$vars, c("dev", "ward"))
+  dd <- linesData(m, colorBy = "ward", shapeBy = "dev")
+  s1 <- dd$panels[[2]]$subjects[[1]]
+  expect_equal(s1$cv$dev, c("P", "Q"))                         # x of row 2 is missing
+  expect_equal(dd$groups$shape, "dev")
+  expect_no_error(withNullDevice(plot(m, colorBy = "ward", shapeBy = "dev", interactive = FALSE)))
+  expect_error(plot(m, shapeBy = "note", interactive = FALSE), "`shapeBy` must be one of")
+})
+
+test_that("colorBy / shapeBy: series values, base and widget renderers, legend toggles", {
+  m <- fxModel("priors", fit = FALSE)
+  d <- linesData(m, colorBy = "site")
+  expect_equal(d$groups$color, "site")
   long <- fxData()$long
   s1 <- d$panels[[1]]$subjects[[1]]
   rows <- which(long$id == s1$id)
   expect_equal(s1$cv$site, as.character(long$site[rows][order(long$t[rows])]))
-  expect_no_error(withNullDevice(plot(m, colorBy = "site", interactive = FALSE)))
+  expect_no_error(withNullDevice(plot(m, colorBy = "site", shapeBy = "site", interactive = FALSE)))
   expect_error(plot(m, colorBy = "nope", interactive = FALSE), "must be one of")
-  # no candidates: no dropdown in the widget, plain grey plot
-  expect_length(colorSpec(bothParts(fxModel("beta", fit = FALSE)$data))$vars, 0L)
+  # no categorical column at all: no dropdown in the widget, plain grey plot
+  dd <- data.frame(id = rep(1:20, each = 3), t = rep(0:2, 20), x = rnorm(60), y = rnorm(60))
+  plain <- jsm(list(y ~ t + scaled(x), x ~ t + (1 | id)), data = dd, time = "t", fit = FALSE)
+  expect_length(groupSpec(plotData(plain))$vars, 0L)
   skipNoWidgets()
-  w <- plot(m, colorBy = "site", interactive = TRUE)
-  expect_equal(w$x$colorBy$vars, "site")
-  expect_equal(w$x$colorBy$selected, "site")
+  expect_null(plot(plain, interactive = TRUE)$x$groupBy)
+  w <- plot(m, colorBy = "site", shapeBy = "site", interactive = TRUE)
+  expect_true("site" %in% w$x$groupBy$vars)
+  expect_equal(w$x$groupBy$color, "site")
+  expect_equal(w$x$groupBy$shape, "site")
   ln <- Filter(function(l) l$kind == "obs", w$x$panels[[1]]$lines)
   expect_true(all(vapply(ln, function(l) length(l$cv$site) == length(l$x), NA)))
-  expect_null(plot(fxModel("beta", fit = FALSE), interactive = TRUE)$x$colorBy)
   skip_if(!hasNode(), "node not available")
   res <- runWidgetJs(list(w = plot(m, interactive = TRUE)))$w
   expect_true(res$ok, label = paste(res$error, res$stack))
-  expect_equal(res$colorOptions, 2L)                             # gray + site
+  expect_equal(res$colorOptions, 1L + length(w$x$groupBy$vars))  # gray + the variables
   expect_true(res$colored)
-  expect_equal(res$colorLevels, 4L)
+  expect_equal(res$colorLevels, length(w$x$groupBy$levels[[w$x$groupBy$vars[1]]]))
+  expect_true(res$levelHides)                                    # a click hides a level ...
+  expect_true(res$levelShows)                                    # ... a second shows it again
   expect_true(res$colorReset)
-  # residuals: the same option
+  expect_equal(res$shapeOptions, 1L + length(w$x$groupBy$shapeVars))
+  expect_true(res$shaped)
+  expect_true(res$shapeReset)
+  # the search box also matches a subject-level variable (site): one entry per site, whose pick
+  # highlights the site's subjects; a variable varying within subjects (grp) is not searched
+  wa <- plot(m, interactive = TRUE)
+  ln <- Filter(function(l) l$kind == "obs", unlist(lapply(wa$x$panels, `[[`, "lines"), recursive = FALSE))
+  siteOf <- tapply(unlist(lapply(ln, function(l) l$cv$site)),
+                   unlist(lapply(ln, function(l) rep(as.character(l$id), length(l$x)))),
+                   function(v) if (length(unique(v)) == 1L) v[1] else NA)
+  gs <- Filter(function(g) g$variable == "site", res$groupSearch)[[1]]
+  expect_true(paste("site =", gs$level) %in% sub(" *[0-9]+ subjects?$", "", gs$entries))
+  expect_equal(gs$picked, sum(siteOf == gs$level, na.rm = TRUE))
+  expect_equal(res$placeholder, "highlight id or site")       # (not "id id")
+  expect_no_match(res$placeholder, "grp")
+  # residuals: the same options
   f <- fxModel("priors")
-  rd <- plotResidualsData(f, NULL, "time", NULL, NULL, 30, NULL, colorBy = "site")
+  rd <- plotResidualsData(f, NULL, "time", NULL, NULL, 30, NULL, colorBy = "site", shapeBy = "site")
   expect_true(any(vapply(rd$panels[[1]]$subjects, function(s) length(s$cv$site) > 0L, NA)))
-  expect_no_error(withNullDevice(plotResiduals(f, colorBy = "site", interactive = FALSE)))
+  expect_no_error(withNullDevice(plotResiduals(f, colorBy = "site", shapeBy = "site", interactive = FALSE)))
 })
 
-test_that("plot.mvremPredictions(): colour dropdown detected automatically, colorBy", {
+test_that("plotRandomEffects(type = \"pairs\"): subjects coloured / shaped by their value", {
+  f <- fxModel("priors")
+  prep <- plotData(f)
+  v <- subjectGroupValues(prep, "id", c("S001", "S002", "nobody"), c("site", "grp"))
+  long <- fxData()$long
+  expect_equal(v$site[1:2], as.character(long$site[match(c("S001", "S002"), long$id)]))
+  expect_true(is.na(v$site[3]))
+  expect_true(is.na(v$grp[1]))                                   # varies within the subject
+  expect_no_error(withNullDevice(plotRandomEffects(f, "x1", type = "pairs", colorBy = "site",
+                                                   shapeBy = "site", interactive = FALSE)))
+  skipNoWidgets()
+  w <- plotRandomEffects(f, "x1", type = "pairs", colorBy = "site", interactive = TRUE)
+  pts <- w$x$panels[[1]]$points
+  expect_equal(length(pts$cv$site), length(pts$id))
+  expect_equal(w$x$groupBy$color, "site")
+  res <- expectWidgetJs(w)
+  expect_true(res$levelHides)
+})
+
+test_that("plot.mvremPredictions(): colour / shape dropdowns detected automatically", {
   p <- fxPredict("multi")
-  expect_no_error(withNullDevice(plot(p, colorBy = "grp", interactive = FALSE)))
+  expect_no_error(withNullDevice(plot(p, colorBy = "grp", shapeBy = "grp", interactive = FALSE)))
   expect_error(plot(p, colorBy = "id", interactive = FALSE), "must be one of")
   skipNoWidgets()
   w <- plot(p, interactive = TRUE)
-  expect_equal(w$x$colorBy$vars, "grp")                          # no colorBy needed
-  expect_null(w$x$colorBy$selected)
+  expect_true("grp" %in% w$x$groupBy$vars)                       # no colorBy needed
+  expect_null(w$x$groupBy$color)
   ln <- unlist(lapply(w$x$panels, `[[`, "lines"), recursive = FALSE)
   pred <- Filter(function(l) l$kind %in% c("pred", "predInt"), ln)
   expect_true(all(vapply(pred, function(l) identical(l$cv$grp, rep("a", length(l$x))), NA)))
-  expect_equal(plot(p, colorBy = "grp", interactive = TRUE)$x$colorBy$selected, "grp")
-  skip_if(!hasNode(), "node not available")
-  res <- runWidgetJs(list(w = w))$w
-  expect_true(res$ok, label = paste(res$error, res$stack))
-  expect_equal(res$colorOptions, 2L)
+  expect_equal(plot(p, colorBy = "grp", interactive = TRUE)$x$groupBy$color, "grp")
+  res <- expectWidgetJs(w)
   expect_true(res$colored)
+  # coloured: the observations faint, the predicted mean and bounds opaque
+  expect_equal(unlist(res$colorOpacity$obs), as.character(predictionFade))
+  expect_equal(unique(unlist(res$colorOpacity[c("pred", "predInt")])), "1")
+  expect_true(res$levelHides)
+  expect_true(res$levelShows)
+})
+
+test_that("plots: `n` and `ncol` must be whole numbers (checkCount())", {
+  m <- fxModel("beta", fit = FALSE)
+  expect_error(plot(m, n = -1, interactive = FALSE), "`n` must be a single whole number >= 0")
+  expect_error(plot(m, ncol = 0, interactive = FALSE), "`ncol` must be a single whole number >= 1")
+  expect_error(plotResiduals(fxModel("beta"), n = 1.5, interactive = FALSE), "`n` must be")
+  expect_error(plotRandomEffects(fxModel("beta"), ncol = "2", interactive = FALSE), "`ncol` must be")
+  expect_no_error(withNullDevice(plot(m, n = 0, interactive = FALSE)))
+})
+
+test_that("plotAssociations(response = ): the associations of those outcomes only", {
+  m <- fxModel("multi")
+  a <- associations(m)
+  w <- plotAssociations(m, response = "k", interactive = TRUE)
+  spec <- w$x
+  expect_equal(length(spec$panels[[1]]$intervals$id), sum(a$outcome == "k"))
+  expect_error(plotAssociations(m, response = "x1"), "No association for the response")
+  expect_no_error(withNullDevice(plotAssociations(m, response = "k", type = "density", interactive = FALSE)))
+})
+
+test_that("plot() of predictions: `response` and `ids` select the panels and subjects", {
+  p <- fxPredict()
+  resp <- unique(p$response)
+  w <- plot(p, response = resp[1], interactive = TRUE)
+  expect_length(w$x$panels, 1L)
+  one <- unique(p$id)[1]
+  w <- plot(p, ids = one, interactive = TRUE)
+  for (pn in w$x$panels) {
+    ids <- unique(vapply(pn$lines, function(l) l$id, ""))
+    expect_true(all(ids == one))
+  }
+  expect_error(plot(p, ids = "nobody", interactive = FALSE), "No predictions for the subject")
+  expect_error(plot(p, response = "zzz", interactive = FALSE), "Unknown response")
 })

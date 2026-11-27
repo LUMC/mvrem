@@ -97,7 +97,7 @@ there.
 
 ### 3.2 Install the software
 
-1. **R** (version 4.3 or newer): <https://cran.r-project.org>.
+1. **R** (version 4.1 or newer): <https://cran.r-project.org>.
 2. **RStudio Desktop**: <https://posit.co/download/rstudio-desktop/>. This guide uses
    RStudio, but any editor works.
 3. **Git**:
@@ -203,7 +203,7 @@ In the RStudio *Console* of the project:
 
 ```r
 devtools::load_all()   # loads the package from your copy of the code
-devtools::test()       # runs all tests: takes about 5 minutes
+devtools::test()       # runs all tests: takes about 3 minutes
 ```
 
 At the end, the test summary should say `[ FAIL 0 | ... ]`. One test is skipped on purpose
@@ -301,7 +301,7 @@ Run the tests of one file while working (faster), and all tests before you conti
 
 ```r
 devtools::test_active_file()   # the test file open in the editor
-devtools::test()               # everything (about 5 minutes)
+devtools::test()               # everything (about 3 minutes)
 ```
 
 ### Step 6: Commit

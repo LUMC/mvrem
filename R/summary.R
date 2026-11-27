@@ -28,28 +28,27 @@ summarizeData <- function(forms, data = NULL, dataOut = NULL, dataLong = NULL) {
               long = resolveData(forms, "long", data, dataLong))
   # complete rows = what na.omit keeps; jsm() has prepared the data with its own na.action
   # (default na.pass), so the data are prepared (and validated) once more here
-  prep <- prepareData(forms, data, dataOut, dataLong, na.action = stats::na.omit)
+  prep <- prepareParts(forms, data, dataOut, dataLong, stats::na.omit, allowEmpty = TRUE)
 
   eqRows <- list()
   missRows <- list()
   # equations in the order the formulae were passed (modelResponses())
-  for (r in modelResponses(forms)) {
-    part <- if (r %in% names(forms$out)) "out" else "long"
-    p <- forms[[part]][[r]]
+  for (r in selectResponses(forms, NULL, observed = TRUE)) {
+    p <- bothParts(forms)[[r]]
+    part <- p$part
     df <- raw[[part]][[r]]
     pd <- prep[[part]][[r]]
-    groupTerms <- vapply(p$re, `[[`, "", "group")
-    groupTerms <- unique(groupTerms)
+    groupTerms <- unique(reGroups(p))
     groups <- if (length(groupTerms)) {
       paste(paste0(groupTerms, ": ",
                    vapply(groupTerms, function(g) length(unique(pd[[g]])), 0L)),
             collapse = ", ")
     } else ""
     eqRows[[length(eqRows) + 1L]] <- data.frame(
-      part = part, response = r, family = if (is.null(p$family)) defaultFamily()$family else p$family$family,
+      part = part, response = r, family = formulaFamily(p)$family,
       rows = nrow(df), complete = nrow(pd), dropped = nrow(df) - nrow(pd), groups = groups
     )
-    vars <- unique(c(unlist(p$variables, use.names = FALSE), p$linkVariables))
+    vars <- formulaVariables(p)
     missRows[[length(missRows) + 1L]] <- data.frame(
       part = rep(part, length(vars)), response = rep(r, length(vars)), variable = vars,
       missing = vapply(vars, function(v) sum(is.na(df[[v]])), 0L, USE.NAMES = FALSE)
@@ -58,8 +57,9 @@ summarizeData <- function(forms, data = NULL, dataOut = NULL, dataLong = NULL) {
 
   zeroRows <- list()
   for (o in forms$out) for (s in o$scaled) {
-    l <- forms$long[[s$target]]
-    vars <- c(l$variables$group, l$variables$covariate)
+    # a latent equation (E38) is evaluated at its variables and those of its targets
+    l <- c(forms$long, latentParts(forms))[[s$target]]
+    vars <- linkedVariables(l, forms$long)
     pd <- prep$out[[o$response]]
     combos <- unique(pd[, vars, drop = FALSE])
     zeroRows[[length(zeroRows) + 1L]] <- data.frame(
@@ -68,15 +68,14 @@ summarizeData <- function(forms, data = NULL, dataOut = NULL, dataLong = NULL) {
     )
   }
 
-  bind <- function(x, cols) {
-    if (length(x)) return(do.call(rbind, x))
-    as.data.frame(stats::setNames(replicate(length(cols), character(), simplify = FALSE), cols))
-  }
   structure(list(
-    equations = bind(eqRows, c("part", "response", "family", "rows", "complete", "dropped",
-                               "groups")),
-    missing = bind(missRows, c("part", "response", "variable", "missing")),
-    zero = bind(zeroRows, c("long", "out", "vars", "rows"))
+    equations = bindRows(eqRows, data.frame(part = character(), response = character(), family = character(),
+                                            rows = integer(), complete = integer(), dropped = integer(),
+                                            groups = character())),
+    missing = bindRows(missRows, data.frame(part = character(), response = character(),
+                                            variable = character(), missing = integer())),
+    zero = bindRows(zeroRows, data.frame(long = character(), out = character(), vars = character(),
+                                         rows = integer()))
   ), class = "mvremDataSummary")
 }
 

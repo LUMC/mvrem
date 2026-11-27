@@ -29,11 +29,11 @@ plotResiduals <- function(x, ...) UseMethod("plotResiduals")
 #' @export
 plotResiduals.mvremModel <- function(x, response = NULL, type = c("time", "fitted"), time = NULL,
                                      group = NULL, n = NULL, ids = NULL, ncol = NULL,
-                                     interactive = NULL, colorBy = NULL, ...) {
+                                     interactive = NULL, colorBy = NULL, shapeBy = NULL, ...) {
   type <- match.arg(type)
   interactive <- useInteractive(interactive)
   d <- plotResidualsData(x, response, type, time, group, defaultSubjectCount(n, interactive), ids,
-                         colorBy)
+                         colorBy, shapeBy)
   ncol <- autoNcol(length(d$panels), ncol)
   kinds <- c(obs = "res", obsMean = "resMean")
   labels <- c(obs = "residuals (subjects)", obsMean = "mean residual")
@@ -45,10 +45,10 @@ plotResiduals.mvremModel <- function(x, response = NULL, type = c("time", "fitte
 # The panels of plotResiduals(), in the format of plotLinesData(): per equation the
 # subjects drawn (x = time or fitted mean, y = residual), the limits over all rows
 # and the smooth mean residual.
-plotResidualsData <- function(x, response, type, time, group, n, ids, colorBy = NULL) {
+plotResidualsData <- function(x, response, type, time, group, n, ids, colorBy = NULL, shapeBy = NULL) {
   needFit(x)
-  prep <- bothParts(x$data)
-  colors <- colorSpec(prep, colorBy)
+  prep <- plotData(x)
+  groups <- groupSpec(prep, colorBy, shapeBy)
   eqs <- bothParts(x$forms)
   response <- residualResponses(x, response)
   time <- if (type == "time") plotTimeVariable(eqs, prep, time, timeVariable(x)) else NA_character_
@@ -72,9 +72,10 @@ plotResidualsData <- function(x, response, type, time, group, n, ids, colorBy = 
     ok <- is.finite(xx) & is.finite(yy)
     w <- observationWeights(x$inla, r)
     size <- if (!is.null(w) && length(w) == nrow(df)) weightSizes(w)   # rows as in fittedValues()
-    # (the colouring variables of this response only: `res` has the columns of all responses)
-    subjects <- subjectSeries(draw, gg, ok, xx, list(y = yy, size = size),
-                              cv = colorColumns(df[intersect(names(df), names(prep[[r]]))], colors))
+    # the colour / shape variables of this response only (`res` has the columns of all responses);
+    # its rows are those of the response's data, so the display-only columns come from there
+    cvSource <- if (nrow(prep[[r]]) == nrow(df)) prep[[r]] else df[intersect(names(df), names(prep[[r]]))]
+    subjects <- subjectSeries(draw, gg, ok, xx, list(y = yy, size = size), cv = groupColumns(cvSource, groups))
     subjects <- Filter(function(s) length(s$x) > 0L, subjects)
     panels[[r]] <- list(
       response = r, missing = FALSE, xlab = if (type == "time") time else "fitted mean",
@@ -88,5 +89,5 @@ plotResidualsData <- function(x, response, type, time, group, n, ids, colorBy = 
   }
   panels <- unname(panels)
   if (type == "time") panels <- shareXlim(panels)   # against the fitted mean the scales differ
-  list(panels = panels, haveFit = FALSE, time = time, group = group, colors = colors)
+  list(panels = panels, haveFit = FALSE, time = time, group = group, groups = groups)
 }

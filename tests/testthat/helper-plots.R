@@ -47,6 +47,20 @@ plotModelCex <- function(m, width, height, ...) {
   plotModel(m, ...)
 }
 
+# plotLinesData() with named arguments and the defaults of plot() (n = 30, all subjects / responses):
+# the tests' one call site of its positional signature.
+linesData <- function(m, response = NULL, time = NULL, group = NULL, n = 30, ids = NULL, fitted = TRUE, ...)
+  plotLinesData(m, response, time, group, n, ids, fitted, ...)
+
+# Render one widget in node (skips without node) and expect the JS to run without error;
+# returns its result (element counts and the states after the interactions).
+expectWidgetJs <- function(w) {
+  testthat::skip_if_not(hasNode(), "node not available")
+  res <- runWidgetJs(list(w = w))$w
+  testthat::expect_true(res$ok, label = paste(res$error, res$stack))
+  res
+}
+
 # ---- node runner of inst/htmlwidgets/mvremPlot.js --------------------------------------------
 
 hasNode <- function() nzchar(Sys.which("node"))

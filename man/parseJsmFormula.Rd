@@ -4,7 +4,7 @@
 \alias{parseJsmFormula}
 \title{Parse a single joint-model formula}
 \usage{
-parseJsmFormula(formula, part = c("out", "long"))
+parseJsmFormula(formula, part = c("out", "long", "latent"))
 }
 \arguments{
 \item{formula}{A two-sided formula. The left-hand side is the response

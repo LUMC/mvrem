@@ -127,8 +127,7 @@ test_that("resolveEffectPriors(): glmer for Poisson and binomial responses", {
 })
 
 test_that("resolveEffectPriors(): a zero lme4 SD falls back to a fraction of the residual SD with a warning", {
-  set.seed(11)
-  d <- data.frame(id = rep(sprintf("S%02d", 1:30), each = 4), t = rep(0:3, 30))
+  d <- fxGridData(30, 0:3, seed = 11)
   d$x <- 1 + 0.5 * d$t + rnorm(nrow(d), sd = 0.5)            # no subject effect at all
   d$y <- d$x + rnorm(nrow(d))
   fit <- suppressMessages(lme4::lmer(x ~ t + (1 + t || id), d))

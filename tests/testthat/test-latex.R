@@ -247,7 +247,7 @@ test_that("latexEquation(): wishartPrec(scale = 'data') is symbolic without data
   # V = S^-1 / df with S the lme4 covariance of the block and df = k + 2 = 4
   S <- as.matrix(lme4::VarCorr(lme4::lmer(x1 ~ t + (1 + t | id), fxData()$long))$id)
   V <- solve(S) / 4
-  sig3 <- function(v) trimws(formatC(signif(v, 3), digits = 3, format = "g"))
+  sig3 <- function(v) numText(v, 3)
   pm <- paste0("\\begin{pmatrix}", sig3(V[1, 1]), " & ", sig3(V[1, 2]), " \\\\ ", sig3(V[2, 1]), " & ",
                sig3(V[2, 2]), "\\end{pmatrix}")
   expect_match(with, paste0(r"(\mathbf{Q}^{(x_{1})}_{\mathrm{id}} &\sim \mathcal{W}_{2}\left(4, )", pm, r"(\right))"), fixed = TRUE)
@@ -684,7 +684,7 @@ test_that("familyLatex(): every family's distribution name is annotated when its
 # Fitted models: annotate = "tooltip" / "inline"
 
 # formatC() as htmlDataString() writes numbers (independent of the code under test)
-tipNum <- function(v, d = 3L) trimws(formatC(signif(v, d), digits = d, format = "g"))
+tipNum <- function(v, d = 3L) numText(v, d)
 
 test_that("latexEquation(annotate = 'tooltip'): balanced, valid \\htmlData arguments, same equations underneath", {
   for (nm in c("beta", "multi", "surv", "priors")) {
@@ -828,7 +828,7 @@ test_that("estimateLookup(): prec keys come from hyperTable()'s group / effect c
   expect_equal(k[["prec|yg|site|(Intercept)"]]$par, "precision of random effect (Intercept) | site in yg")
   expect_equal(k[["prec|x2|id|t"]]$par, "precision of random effect t | id in x2")
   # the tooltips wrap the tau of the block's distribution line
-  w <- htmlDataWrappers(latexEquation(m, annotate = "tooltip"))
+  w <- fxTips("priors")
   symOf <- function(par) unique(w$sym[startsWith(w$arg, paste0("par=", par, ","))])
   expect_equal(symOf("precision of random effect (Intercept) | site in yg"), r"(\tau^{(\mathit{yg})}_{0,\mathrm{site}})")
   expect_equal(symOf("precision of random effect (Intercept) | id in x2"), r"(\tau^{(x_{2})}_{0,\mathrm{id}})")
@@ -853,11 +853,11 @@ test_that("latexEquation(): wishartPrec(scale = 'data') on x1: the stored resolv
   # the stored matrix is S^-1 / df of the lme4 fit of the x1 formula (df = k + 2 = 4)
   S <- as.matrix(lme4::VarCorr(lme4::lmer(x1 ~ t + (1 + t | id), fxData()$long))$id)
   expect_equal(V, unname(solve(S) / 4), tolerance = 1e-6)
-  l <- texLines(latexEquation(m))
+  l <- fxTex("priors")
   pm <- paste0("\\begin{pmatrix}", tipNum(V[1, 1]), " & ", tipNum(V[1, 2]), " \\\\ ", tipNum(V[2, 1]), " & ",
                tipNum(V[2, 2]), "\\end{pmatrix}")
   expect_match(texLine(l, r"(\mathbf{Q}^{(x_{1})}_{\mathrm{id}} &\sim)"), paste0(r"(\mathcal{W}_{2}\left(4, )", pm, r"(\right))"), fixed = TRUE)
-  w <- htmlDataWrappers(latexEquation(m, annotate = "tooltip"))
+  w <- fxTips("priors")
   expect_match(tipArg(w, "covariance of the random effects | id of x1"),
                "note=Wishart prior on the precision matrix with k + 2 degrees of freedom (E[Q] is df times the scale matrix - here the precision matrix of an lme4 fit of the formula divided by df)", fixed = TRUE)
   # a `|` block with several effects writes Q, not its single precisions: the note is in the lookup only
@@ -869,7 +869,7 @@ test_that("latexEquation(): wishartPrec(scale = 'data') on x1: the stored resolv
 
 test_that("latexEquation(): pcSd(1) on the yg residual and the site block: lines and notes", {
   m <- fxModel("priors")
-  l <- texLines(latexEquation(m))
+  l <- fxTex("priors")
   # Exp rate = -log(0.01) / 1 = 4.61
   pc <- r"(^{-1/2} &\sim \mathrm{Exp}\left(4.61\right), \quad P\left(\left()"
   expect_match(texLine(l, r"(\left(\tau^{(\mathit{yg})}_{\varepsilon}\right)^{-1/2} &\sim)"),
@@ -878,7 +878,7 @@ test_that("latexEquation(): pcSd(1) on the yg residual and the site block: lines
                paste0(r"(\left(\tau^{(\mathit{yg})}_{0,\mathrm{site}}\right))", pc, r"(\tau^{(\mathit{yg})}_{0,\mathrm{site}}\right)^{-1/2} > 1\right) = 0.01)"), fixed = TRUE)
   expect_equal(grep(r"(\tau^{(\mathit{yg})}_{0,\mathrm{site}}\right)^{-1/2} &\sim)", l, fixed = TRUE),
                grep(r"(b^{(\mathit{yg})}_{0,l} &\sim)", l, fixed = TRUE) + 1L)
-  w <- htmlDataWrappers(latexEquation(m, annotate = "tooltip"))
+  w <- fxTips("priors")
   note <- "PC prior on the SD: P(SD > 1) is 0.01 (SD is Exp(4.61))"
   expect_match(tipArg(w, "residual precision of yg"), paste0(",note=SD [0-9.]+ \\([0-9.]+\\)\\. ", gsub("([().])", "\\\\\\1", note), "$"))
   expect_match(tipArg(w, "precision of random effect (Intercept) | site in yg"), note, fixed = TRUE)
@@ -893,10 +893,10 @@ test_that("latexEquation(): pcSd(1) on the yg residual and the site block: lines
 
 test_that("latexEquation(): halfCauchySd(1) on the x2 intercept block: line and note", {
   m <- fxModel("priors")
-  l <- texLines(latexEquation(m))
+  l <- fxTex("priors")
   expect_match(texLine(l, r"(\mathrm{C}^{+})"), r"(\left(\tau^{(x_{2})}_{0,\mathrm{id}}\right)^{-1/2} &\sim \mathrm{C}^{+}\left(0, 1\right))", fixed = TRUE)
   expect_equal(grep(r"(\mathrm{C}^{+})", l, fixed = TRUE), grep(r"(b^{(x_{2})}_{0,l} &\sim)", l, fixed = TRUE) + 1L)
-  w <- htmlDataWrappers(latexEquation(m, annotate = "tooltip"))
+  w <- fxTips("priors")
   expect_match(tipArg(w, "precision of random effect (Intercept) | id in x2"), "half-Cauchy prior on the SD with scale 1$")
   expect_match(tipArg(w, "precision of random effect (Intercept) | id in x2"), ",note=SD [0-9.]+ \\([0-9.]+\\)\\. half-Cauchy")
   expect_equal(unique(w$sym[startsWith(w$arg, "par=half-Cauchy prior,")]), r"(\mathrm{C}^{+})")
@@ -904,24 +904,24 @@ test_that("latexEquation(): halfCauchySd(1) on the x2 intercept block: line and 
 
 test_that("latexEquation(): halfNormalSd(0.5) on the x2 slope block: line and note", {
   m <- fxModel("priors")
-  l <- texLines(latexEquation(m))
+  l <- fxTex("priors")
   # precision 1 / 0.5^2 = 4
   expect_match(texLine(l, r"(\mathcal{N}^{+})"), r"(\left(\tau^{(x_{2})}_{1,\mathrm{id}}\right)^{-1/2} &\sim \mathcal{N}^{+}\left(0, \left(4\right)^{-1}\right))", fixed = TRUE)
   expect_equal(grep(r"(\mathcal{N}^{+})", l, fixed = TRUE), grep(r"(b^{(x_{2})}_{1,l} &\sim)", l, fixed = TRUE) + 1L)
-  w <- htmlDataWrappers(latexEquation(m, annotate = "tooltip"))
+  w <- fxTips("priors")
   expect_match(tipArg(w, "precision of random effect t | id in x2"), "half-normal prior on the SD with scale 0.5$")
   expect_equal(unique(w$sym[startsWith(w$arg, "par=half-normal prior,")]), r"(\mathcal{N}^{+})")
 })
 
 test_that("latexEquation(): gammaPrec() on the x3 `||` block and on the x2 size / x3 precision: lines and notes", {
   m <- fxModel("priors")
-  l <- texLines(latexEquation(m))
+  l <- fxTex("priors")
   expect_match(texLine(l, r"(\tau^{(x_{3})}_{k,\mathrm{id}} &\sim)"), r"(\mathrm{Gamma}\left(1, 0.01\right), \quad k = 0, 1)", fixed = TRUE)
   expect_equal(grep(r"(\tau^{(x_{3})}_{k,\mathrm{id}} &\sim)", l, fixed = TRUE), grep(r"(b^{(x_{3})}_{1,l} &\sim)", l, fixed = TRUE) + 1L)
   expect_match(texLine(l, r"(\kappa^{(x_{2})} &\sim)"), r"(\mathrm{Gamma}\left(1, 0.01\right))", fixed = TRUE)
   expect_match(texLine(l, r"(\tau^{(x_{3})}_{\varepsilon} &\sim)"), r"(\mathrm{Gamma}\left(1, 5 \cdot 10^{-5}\right))", fixed = TRUE)
   expect_equal(grep(r"(\tau^{(x_{3})}_{\varepsilon} &\sim)", l, fixed = TRUE), grep(r"(t_{\nu^{(x_{3})}})", l, fixed = TRUE) + 1L)
-  w <- htmlDataWrappers(latexEquation(m, annotate = "tooltip"))
+  w <- fxTips("priors")
   expect_match(tipArg(w, "size of x2"), "note=prior on the precision: Gamma with shape 1 and rate 0.01 (INLA loggamma)", fixed = TRUE)
   expect_match(tipArg(w, "precision of x3"), "Gamma with shape 1 and rate 5e-05 (INLA loggamma)", fixed = TRUE)
   expect_match(tipArg(w, "precision of x3"), ",note=SD [0-9.]+ \\([0-9.]+\\)\\. prior on the precision")
@@ -933,7 +933,7 @@ test_that("latexEquation(): gammaPrec() on the x3 `||` block and on the x2 size 
 
 test_that("latexEquation(): normalCoef(0, 2) on scaled(x1): the gamma line and its note; defaults marked", {
   m <- fxModel("priors")
-  l <- texLines(latexEquation(m))
+  l <- fxTex("priors")
   # precision 1 / 2^2 = 0.25
   g <- texLine(l, r"(\gamma_{\mathit{yg},x_{1}} &\sim)")
   expect_equal(g, r"(\gamma_{\mathit{yg},x_{1}} &\sim \mathcal{N}\left(0, \left(0.25\right)^{-1}\right))")
@@ -942,7 +942,7 @@ test_that("latexEquation(): normalCoef(0, 2) on scaled(x1): the gamma line and i
   # after the outcome's distributions, before the u lines
   expect_true(grep(r"(\gamma_{\mathit{yg},x_{1}} &\sim)", l, fixed = TRUE) > grep(r"(b^{(\mathit{yg})}_{0,l} &\sim)", l, fixed = TRUE))
   expect_true(all(grep("^u\\^", l) > grep(r"(\gamma_{\mathit{yg},x_{1}} &\sim)", l, fixed = TRUE)))
-  w <- htmlDataWrappers(latexEquation(m, annotate = "tooltip"))
+  w <- fxTips("priors")
   expect_match(tipArg(w, "association gamma (x1 -> yg)"), "note=normal prior on the coefficient with mean 0 and SD 2$")
   expect_match(tipArg(w, "association gamma (x2 -> yg)"), "note=normal prior on the coefficient with mean 0 and SD 10 (default)", fixed = TRUE)
   expect_equal(unique(w$sym[startsWith(w$arg, "par=normal prior,")]), r"(\mathcal{N})")

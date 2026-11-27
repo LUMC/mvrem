@@ -110,8 +110,9 @@ has hazard \eqn{h(t) = \alpha \lambda t^{\alpha - 1}} and survival
 \eqn{S(t) = \exp(-\lambda t^\alpha)} with \eqn{\log \lambda} the linear
 predictor (the exponential is \eqn{\alpha = 1}), so an association
 coefficient is a log hazard ratio. The marker enters the hazard at the values
-of its covariates given in the outcome row (e.g. \code{t = time}). Survival
-responses are not plotted, have no residuals and cannot be predicted; their
+of its covariates given in the outcome row (e.g. \code{t = time}). \link[=plot.mvremModel]{plot()}
+draws a survival response as its Kaplan-Meier curve with the model's survival
+curve (\code{\link[=survivalCurves]{survivalCurves()}}). Survival responses have no residuals and cannot be predicted; their
 fitted value (\code{\link[=fittedValues]{fittedValues()}}) is \eqn{\lambda} (the hazard scale), not a
 mean time. A time of 0 is accepted for a censored row only.
 

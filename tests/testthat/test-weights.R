@@ -167,7 +167,9 @@ test_that("inlaArgumentList(): `scale` is one value per row, the weights at thei
 })
 
 test_that("jsm(inlaOptions = ): `scale` is built by mvrem and cannot be set", {
-  m <- weightModel(inlaOptions = list(scale = 2))
+  expect_error(weightModel(inlaOptions = list(scale = 2)), "must not set `scale`")   # checked up front
+  m <- weightModel()
+  m$options$inlaOptions <- list(scale = 2)
   expect_error(inlaArguments(m), "must not set `scale`")
 })
 
@@ -318,7 +320,7 @@ test_that("weightSizes(): point area proportional to the weight, relative to the
 
 test_that("plot() / plotResiduals() / predictions: weighted points carry their size and a note", {
   m <- weightModel()
-  d <- plotLinesData(m, NULL, NULL, NULL, 30, NULL, TRUE)
+  d <- linesData(m)
   px <- d$panels[[which(vapply(d$panels, `[[`, "", "response") == "x")]]
   py <- d$panels[[which(vapply(d$panels, `[[`, "", "response") == "y")]]
   expect_equal(px$note, "point area proportional to w")

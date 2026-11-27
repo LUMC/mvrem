@@ -12,6 +12,9 @@
 #                         the fit fails (the failure is cached, the fit is not retried)
 #   fxWarnings(name, fit) the warnings raised while building / fitting the fixture
 #   fxPredict(name)       predict() of the fitted "multi" model on fxNewdata (cached)
+#   fxSurvivalArm()       the "surv" model with a subject-level factor `arm` (A / B) in the
+#                         survival data (not in any formula: a display column), fitted with
+#                         config = TRUE (survival curves per level, with a band; E31)
 #   withNullDevice(expr)  draw base graphics to a null device
 #
 # Reference models (name):
@@ -129,6 +132,30 @@ fxModel <- function(name, fit = TRUE) {
   }
   if (identical(.fx[[key]], "failed")) testthat::skip(paste("INLA fit of fixture", name, "failed"))
   .fx[[key]]
+}
+
+# An UNFITTED reference model with extra jsm() arguments (e.g. fxBuild("beta", threads = 2)).
+fxBuild <- function(name, ...) suppressMessages(do.call(jsm, c(fxSpec(name), list(fit = FALSE), list(...))))
+
+# A small balanced grid: n subjects (S01, ...) at the visit times `times`, with a seed; the
+# responses are added by the test.
+fxGridData <- function(n, times, seed = 1) {
+  set.seed(seed)
+  data.frame(id = rep(sprintf("S%02d", seq_len(n)), each = length(times)), t = rep(times, n),
+             stringsAsFactors = FALSE)
+}
+
+fxSurvivalArm <- function() {
+  testthat::skip_if_not_installed("INLA")
+  if (is.null(.fx$survArm)) {
+    s <- fxSpec("surv")
+    s$dataOut$arm <- factor(rep(c("A", "B"), length.out = nrow(s$dataOut)))
+    m <- suppressWarnings(suppressMessages(do.call(jsm, c(s, list(
+      inlaOptions = list(control.compute = list(config = TRUE)))))))
+    .fx$survArm <- if (is.null(inlaFit(m))) "failed" else m
+  }
+  if (identical(.fx$survArm, "failed")) testthat::skip("INLA fit of fixture surv + arm failed")
+  .fx$survArm
 }
 
 fxWarnings <- function(name, fit = TRUE) {

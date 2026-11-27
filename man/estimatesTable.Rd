@@ -34,7 +34,7 @@ display math (\verb{$$ ... $$}) of an HTML document: KaTeX and MathJax render it
 A data frame of class \code{mvremEstimates} with \code{response}, \code{type}
 (\code{"fixed"}, \code{"association"}, \code{"sd"}, \code{"correlation"}, \code{"residual"},
 \code{"family"}, or \code{"other"} for hyperparameters mvrem does not recognise),
-\code{parameter} (e.g. \code{t}, \code{gamma (x1 -> y)}, \verb{SD t | id}, \verb{corr intercept, t | id},
+\code{parameter} (e.g. \code{(Intercept)}, \code{t}, \code{gamma (x1 -> y)}, \verb{SD t | id}, \verb{corr (Intercept), t | id},
 \verb{residual SD}, \code{phi}), and the posterior \code{mean}, \code{sd}, \code{q0.025}, \code{q0.5},
 \code{q0.975}; rows grouped by response (in the order the formulae were passed to \code{\link[=jsm]{jsm()}}). \code{format()} returns a
 character string (lines separated by newlines) with \code{mean (sd)} and the

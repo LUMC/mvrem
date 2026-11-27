@@ -231,6 +231,49 @@ estimatesTable(m3)
 True values: $\gamma = 0.8$ (a log hazard ratio per unit of the marker), Weibull shape
 $\alpha = 1.5$.
 
+`plot()` draws the survival outcome against its own time: the Kaplan-Meier curve (censored
+times as open circles) and the model's survival curve averaged over the subjects. A fit with
+`inlaOptions = list(control.compute = list(config = TRUE))` adds a 95% band from posterior draws;
+`survivalCurves()` gives the curves as a data frame.
+
+```{r survival-plot}
+plot(m3)
+```
+
+## Several cores, several fits
+
+INLA uses all cores of the machine for one fit by default. `jsm(threads = )` changes that:
+a number, `"auto"` (the cores `availableThreads()` finds: it respects container limits,
+SLURM / SGE allocations and `R CMD check`, and on Apple Silicon counts only the performance
+cores) or `"A:B"` (outer : inner INLA threads). `refit()` and `predict()` take it too.
+
+```{r threads}
+availableThreads()
+```
+
+Independent fits (candidate models, simulation replicates, predictions by refitting) run in
+parallel with `jsmApply()`, which divides the core budget among its workers. Here the first
+model with and without the data-centred prior of the random-effect block:
+
+```{r apply}
+variants <- list(
+  "wishartPrec(scale = \"data\")" = x1 ~ 1 + t + re(1 + t | id, prior = wishartPrec(scale = "data")),
+  "INLA's default prior"          = x1 ~ 1 + t + (1 + t | id))
+gammas <- jsmApply(variants, function(fx) {
+  fit <- jsm(list(y ~ 1 + t + scaled(x1), fx), data = list(y = dY, x1 = dX),
+             family = list(y = betaFamily()))
+  associations(fit)[, c("mean", "q0.025", "q0.975")]   # return a table, not the model
+})
+do.call(rbind, gammas)
+```
+
+On a 16-core cluster node, four candidate models ran about twice as fast this way as one
+after another, and simulation studies (many fits of the same model) three to four times as
+fast; on a laptop, where INLA already keeps the cores busy within one fit, the gain is
+smaller. Workers are forked copies of the R session on Linux and macOS (in a terminal or
+`Rscript`); on Windows and in RStudio they are separate R sessions, which load the installed
+mvrem and receive the variables `FUN` uses. Every worker holds its own fit in memory.
+
 ## Overview
 
 | Function | Gives |

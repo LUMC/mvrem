@@ -7,7 +7,8 @@
 buildInlaFormula(
   forms,
   data,
-  naming = getOption("mvrem.naming", namingScheme())
+  naming = getOption("mvrem.naming", namingScheme()),
+  zeroLogPrec = defaultZeroLogPrec
 )
 }
 \arguments{
@@ -16,6 +17,9 @@ buildInlaFormula(
 \item{data}{Result of \code{\link[=prepareData]{prepareData()}}.}
 
 \item{naming}{Naming scheme, see \code{\link[=namingScheme]{namingScheme()}}.}
+
+\item{zeroLogPrec}{Fixed log precision of the zero-equation fields (default -6), see
+\code{\link[=jsm]{jsm()}}; a latent equation may set its own (\code{\link[=latentSpec]{latentSpec()}}).}
 }
 \value{
 A list with elements
@@ -37,7 +41,10 @@ to be replaced by 1 when the INLA arguments are assembled,
 \item \code{random}: per response, a list of blocks with \code{group}, \code{lhs} (formula of
 the block's effects), \code{effects}
 (design-matrix columns), \code{index}, \code{weight} (\code{NA} for the intercept),
-\code{levels} (name in \code{LEVELS}) and \code{terms} (\code{f()} calls),
+\code{levels} (name in \code{LEVELS}), \code{terms} (\code{f()} calls) and \code{prior} (the block's prior,
+resolved from the data when it was data-scaled; \code{NULL} for INLA's default),
+\item \code{survival}: per response, \code{TRUE} for a survival likelihood,
+\item \code{groups}: per grouping term, its sorted levels (the order of the random-effect fields),
 \item \code{zero}: per (long, out) pair, named \code{"<long>_<out>"}: \code{long}, \code{out},
 \code{vars}, \code{index}, \code{weight}, \code{levels} and \code{term},
 \item \code{scaled}: per pair, named \code{"<out>_<long>"}: \code{out}, \code{long}, \code{index}, \code{term},

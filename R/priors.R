@@ -364,8 +364,8 @@ dataPriorWhat <- function(p, blk)
 # one warning; what = description of the block, prior / alt = the prior
 # constructor and the alternative named in the error for other families.
 lme4BlockFit <- function(p, data, what, prior, alt) {
-  fam <- p$family
-  kind <- if (is.null(fam)) "gaussian" else fam$kind
+  fam <- formulaFamily(p)
+  kind <- fam$kind
   f <- p$lme4Formula
   lhs <- p$responseExpr
   gl <- NULL                       # NULL: lmer(), else the glmer() family
@@ -527,6 +527,14 @@ halfCauchyExpression <- function(s) {
          " return(logdens + log(sigma) - log(2));")
 }
 
+# The annotated LaTeX symbol of a prior distribution (its tooltip key is the distribution's
+# note in distributionNotes()); used by priorLatex() and dataPriorLatex().
+priorDistSymbol <- function(dist) {
+  sym <- c(priorGamma = "\\mathrm{Gamma}", priorPc = "\\mathrm{Exp}", priorHalfNormal = "\\mathcal{N}^{+}",
+           priorHalfCauchy = "\\mathrm{C}^{+}")[[dist]]
+  annot(sym, distKey(dist))
+}
+
 # LaTeX lines of the prior of an RE block: tau = precision symbol(s) (scalar
 # priors) or Q (wishart); idx = effect indices for the "k = ..." suffix.
 priorLatex <- function(prior, k, tau, Q, idx) {
@@ -538,14 +546,14 @@ priorLatex <- function(prior, k, tau, Q, idx) {
   if (prior$dist == "wishart" && is.matrix(a$scale)) k <- nrow(a$scale)
   v <- priorParams(prior, k)
   switch(prior$dist,
-    gamma = paste0(tau, " &\\sim ", annot("\\mathrm{Gamma}", distKey("priorGamma")), "\\left(", numLatex(v$shape), ", ",
+    gamma = paste0(tau, " &\\sim ", priorDistSymbol("priorGamma"), "\\left(", numLatex(v$shape), ", ",
                    numLatex(v$rate), "\\right)", suffix),
-    pc = paste0(sd, " &\\sim ", annot("\\mathrm{Exp}", distKey("priorPc")), "\\left(", numLatex(v$rate),
+    pc = paste0(sd, " &\\sim ", priorDistSymbol("priorPc"), "\\left(", numLatex(v$rate),
                 "\\right), \\quad P\\left(", sd, " > ", numLatex(v$u), "\\right) = ",
                 numLatex(v$alpha), suffix),
-    halfNormal = paste0(sd, " &\\sim ", annot("\\mathcal{N}^{+}", distKey("priorHalfNormal")), "\\left(0, \\left(",
+    halfNormal = paste0(sd, " &\\sim ", priorDistSymbol("priorHalfNormal"), "\\left(0, \\left(",
                         numLatex(v$prec), "\\right)^{-1}\\right)", suffix),
-    halfCauchy = paste0(sd, " &\\sim ", annot("\\mathrm{C}^{+}", distKey("priorHalfCauchy")), "\\left(0, ",
+    halfCauchy = paste0(sd, " &\\sim ", priorDistSymbol("priorHalfCauchy"), "\\left(0, ",
                         numLatex(v$scale), "\\right)", suffix),
     wishart = {
       # the scale as written (s I_k for a number, \hat{V} for "data"), not wishartArgs()'s matrix
@@ -564,21 +572,21 @@ dataPriorLatex <- function(prior, tau, sd, suffix, several) {
   sHat <- paste0("\\hat{s}_{", if (several) "k,", "\\mathrm{data}}")
   times <- function(cc) if (cc == 1) sHat else paste0(numLatex(cc), "\\,", sHat)
   switch(prior$dist,
-    gamma = paste0(tau, " &\\sim ", annot("\\mathrm{Gamma}", distKey("priorGamma")), "\\left(", numLatex(a$shape), ", ",
+    gamma = paste0(tau, " &\\sim ", priorDistSymbol("priorGamma"), "\\left(", numLatex(a$shape), ", ",
                    times(a$shape), "^{2}\\right)", suffix),
     # rate -log(alpha) / u with u = pcU s written as a fraction (cf. priorParams())
-    pc = paste0(sd, " &\\sim ", annot("\\mathrm{Exp}", distKey("priorPc")), "\\left(\\frac{", numLatex(-log(a$alpha)), "}{",
+    pc = paste0(sd, " &\\sim ", priorDistSymbol("priorPc"), "\\left(\\frac{", numLatex(-log(a$alpha)), "}{",
                 times(r$pcU), "}\\right), \\quad P\\left(", sd, " > ", times(r$pcU), "\\right) = ",
                 numLatex(a$alpha), suffix),
-    halfNormal = paste0(sd, " &\\sim ", annot("\\mathcal{N}^{+}", distKey("priorHalfNormal")), "\\left(0, \\left(\\left(",
+    halfNormal = paste0(sd, " &\\sim ", priorDistSymbol("priorHalfNormal"), "\\left(0, \\left(\\left(",
                         times(r$halfNormalScale), "\\right)^{-2}\\right)^{-1}\\right)", suffix),
-    halfCauchy = paste0(sd, " &\\sim ", annot("\\mathrm{C}^{+}", distKey("priorHalfCauchy")), "\\left(0, ",
+    halfCauchy = paste0(sd, " &\\sim ", priorDistSymbol("priorHalfCauchy"), "\\left(0, ",
                         times(r$halfCauchyScale), "\\right)", suffix))
 }
 
 # Number with `digits` significant digits; 5e-05 -> 5 \cdot 10^{-5}.
 numLatex <- function(x, digits = 3) {
-  s <- formatC(signif(x, digits), digits = digits, format = "g")
+  s <- numText(x, digits)
   s <- trimws(s)
   if (grepl("e", s)) {
     parts <- strsplit(s, "e", fixed = TRUE)[[1L]]

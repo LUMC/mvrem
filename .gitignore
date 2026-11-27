@@ -24,3 +24,7 @@ inst/doc/
 /Meta/
 vignettes/*.html
 public/
+
+# PARDISO licence (never commit)
+panua.lic
+pardiso.lic

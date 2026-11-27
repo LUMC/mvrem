@@ -154,3 +154,18 @@ withEstState <- function(est, expr) {
   on.exit(latexState$est <- old, add = TRUE)
   force(expr)
 }
+
+# The LaTeX lines / tooltip wrappers of a reference model, computed once per run (the lookup
+# behind the tooltips rebuilds the variance components and fitted values every time).
+.fxLatex <- new.env(parent = emptyenv())
+fxTex <- function(name) {
+  key <- paste0(name, "_tex")
+  if (is.null(.fxLatex[[key]])) .fxLatex[[key]] <- texLines(latexEquation(fxModel(name)))
+  .fxLatex[[key]]
+}
+fxTips <- function(name) {
+  key <- paste0(name, "_tips")
+  if (is.null(.fxLatex[[key]]))
+    .fxLatex[[key]] <- htmlDataWrappers(latexEquation(fxModel(name), annotate = "tooltip"))
+  .fxLatex[[key]]
+}

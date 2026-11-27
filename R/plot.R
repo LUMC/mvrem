@@ -14,12 +14,21 @@
 #' comparable with the fitted values, which are on this scale. Transformed
 #' responses (e.g. `log(w)`) are shown on the transformed scale.
 #'
+#' A survival response (one row per subject) is drawn against its own time: the
+#' Kaplan-Meier curve with the censored times as open circles and, for a fitted
+#' model, the model's survival curve averaged over the subjects, with a 95% band
+#' when the fit keeps INLA's configurations (see [survivalCurves()]). With
+#' `colorBy` a variable of the survival data, there is one curve per level.
+#'
 #' By default (`interactive = NULL`, when the suggested package htmlwidgets is
 #' installed) the plot is an HTML widget (see [htmlPlot()]): the
 #' subject under the mouse is identified (id, time, observed and fitted value)
 #' and highlighted in all panels at once, a click pins a subject, a search box
-#' finds an id, and the legend switches elements on and off. The widget works
-#' offline. `interactive = FALSE` draws with base graphics.
+#' finds subjects while typing (by id, or by the value of a subject-level
+#' categorical variable such as a clinic) and lists them in a dropdown (a pick
+#' highlights that subject or all subjects of that clinic), and the legend
+#' switches elements on and off. The widget works offline. `interactive =
+#' FALSE` draws with base graphics.
 #'
 #' @param x A model (class `mvremModel`), e.g. from [jsm()].
 #' @param response Names of the responses to plot (default: all).
@@ -37,11 +46,14 @@
 #'   identification of the subjects if the htmlwidgets package is installed,
 #'   else base graphics; `TRUE` / `FALSE` force one of them (see [htmlPlot()]).
 #' @param ... Ignored.
-#' @param colorBy `NULL` (default: grey) or the name of a categorical variable of the data
-#'   (factor, character or logical, 2 to 12 levels, e.g. a clinic or a device) by which the
-#'   observed points are coloured; a subject's line takes the colour too when the variable is
-#'   constant within the subject. The widget offers all such variables in a dropdown
-#'   ("color:"), `colorBy` only sets its initial choice.
+#' @param colorBy,shapeBy `NULL` (default: grey circles) or the name of a categorical variable
+#'   of the data (factor, character or logical; 2 to 12 levels for `colorBy`, 2 to 6 for
+#'   `shapeBy`; e.g. a clinic or a device, also a column of the data that no formula uses) by
+#'   which the observed points are coloured / shaped; a subject's line takes the colour too when
+#'   the variable is constant within the subject. The widget offers all such variables in two
+#'   dropdowns ("color:", "shape:"); these arguments only set the initial choice. In the
+#'   widget, clicking a level in the legend of the chosen variable hides that subset of the data
+#'   (its points, and the subjects whose value is constant), clicking again shows it.
 #' @return The widget, or `x` invisibly for base graphics.
 #' @examples
 #' \dontrun{
@@ -55,10 +67,10 @@
 #' @export
 plot.mvremModel <- function(x, response = NULL, time = NULL, group = NULL, n = NULL,
                             ids = NULL, fitted = TRUE, ncol = NULL, interactive = NULL,
-                            colorBy = NULL, ...) {
+                            colorBy = NULL, shapeBy = NULL, ...) {
   interactive <- useInteractive(interactive)
   d <- plotLinesData(x, response, time, group, defaultSubjectCount(n, interactive), ids, fitted,
-                     colorBy)
+                     colorBy, shapeBy)
   ncol <- autoNcol(length(d$panels), ncol)
   if (isTRUE(interactive)) return(htmlLines(d, ncol))
   drawLinesPanels(d, ncol, linesLegend(d$haveFit, predicted = hasPredicted(d)))
@@ -68,12 +80,12 @@ plot.mvremModel <- function(x, response = NULL, time = NULL, group = NULL, n = N
 # The data of the panels of plot.mvremModel(): per equation the subjects drawn
 # (observed values, fitted values), the axis limits (all rows, not only the
 # subjects drawn) and the smooth means. Shared by the base and HTML renderers.
-plotLinesData <- function(x, response, time, group, n, ids, fitted, colorBy = NULL) {
+plotLinesData <- function(x, response, time, group, n, ids, fitted, colorBy = NULL, shapeBy = NULL) {
   inl <- x$inla
-  prep <- bothParts(x$data)
-  colors <- colorSpec(prep, colorBy)
+  prep <- plotData(x)
+  groups <- groupSpec(prep, colorBy, shapeBy)
   eqs <- bothParts(x$forms)
-  response <- checkResponses(x, response)        # in the order of the model
+  response <- selectResponses(x, response, observed = TRUE)   # in the order of the model
 
   time <- plotTimeVariable(eqs, prep, time, timeVariable(x))
   group <- plotGroupVariable(eqs, prep, group)
@@ -88,8 +100,8 @@ plotLinesData <- function(x, response, time, group, n, ids, fitted, colorBy = NU
     p <- eqs[[r]]
     df <- prep[[r]]
     if (isTRUE(inl$survival[[r]])) {
-      panels[[r]] <- list(response = r, missing = TRUE,
-                          title = paste0(r, ": survival response (not plotted)"))
+      # Kaplan-Meier + the model's survival curve (E31), against the survival time
+      panels[[r]] <- survivalPanel(x, r, groups, group, haveFit)
       next
     }
     if (!time %in% names(df)) {
@@ -114,11 +126,12 @@ plotLinesData <- function(x, response, time, group, n, ids, fitted, colorBy = NU
     # weights(): point area proportional to the weight of the observation
     size <- weightSizes(observationWeights(inl, r))
     subjects <- subjectSeries(draw, gg, !is.na(y), tt, list(y = y, fit = if (useFit) f$mean, size = size),
-                              cv = colorColumns(df, colors))
+                              cv = groupColumns(df, groups))
     # INLA's predictions of the missing observations (response NA in a kept row): drawn as
     # open circles, not joined to the subject's lines
     predicted <- if (useFit && anyNA(y))
-      Filter(function(s) length(s$x) > 0L, subjectSeries(draw, gg, is.na(y), tt, list(fit = f$mean)))
+      Filter(function(s) length(s$x) > 0L, subjectSeries(draw, gg, is.na(y), tt, list(fit = f$mean),
+                                                         cv = groupColumns(df, groups)))
     panels[[r]] <- list(
       response = r, missing = FALSE, xlab = time, ylab = ylab, grouped = !is.na(group),
       title = equationTitle(p),
@@ -127,7 +140,7 @@ plotLinesData <- function(x, response, time, group, n, ids, fitted, colorBy = NU
       note = if (!is.null(size)) weightNote(p),
       smoothObs = smoothCurve(tt, y), smoothFit = if (useFit) smoothCurve(tt, f$mean))
   }
-  list(panels = shareXlim(unname(panels)), haveFit = haveFit, time = time, group = group, colors = colors)
+  list(panels = shareXlim(unname(panels)), haveFit = haveFit, time = time, group = group, groups = groups)
 }
 
 # The time variable of a plot (E19): the `time` argument of the plot (checked: a
@@ -145,27 +158,36 @@ plotTimeVariable <- function(eqs, prep, time, default = NULL) {
 }
 
 # `time` must name one variable of the model's data that is numeric wherever it occurs.
-checkTimeColumn <- function(prep, time, arg = "`time`") {
-  if (!isString(time))
-    stop(arg, " must be the name of one variable.", call. = FALSE)
-  has <- vapply(prep, function(df) time %in% names(df), NA)
+checkTimeColumn <- function(prep, time, arg = "`time`")
+  checkColumnName(time, arg, prep, numeric = TRUE)
+
+# `value` must be the name of one column of (some of) the data frames `frames` (`allowNA`: NA
+# passes, e.g. `group = NA` = no subject lines; `numeric`: the column must be numeric wherever it
+# occurs, B10); `what` names the frames in the message. Returns the name.
+checkColumnName <- function(value, arg, frames, what = "the model's data", allowNA = FALSE,
+                            numeric = FALSE) {
+  if (allowNA && length(value) == 1L && is.na(value)) return(NA_character_)
+  if (!isString(value)) stop(arg, " must be the name of one variable.", call. = FALSE)
+  has <- vapply(frames, function(df) value %in% names(df), NA)
   if (!any(has))
-    stop(arg, " = '", time, "' is not a variable of the model's data.", call. = FALSE)
-  # a factor / character time variable would fail later inside range() (B10): say so here
-  if (!all(vapply(prep[has], function(df) is.numeric(df[[time]]), NA)))
-    stop(arg, " = '", time, "' must be a numeric variable (it is ",
-         paste(unique(vapply(prep[has], function(df) class(df[[time]])[1L], "")), collapse = " / "),
+    stop(arg, " = '", value, "' is not a ", if (identical(what, "the predictions")) "column" else "variable",
+         " of ", what, ".", call. = FALSE)
+  if (numeric && !all(vapply(frames[has], function(df) is.numeric(df[[value]]), NA)))
+    stop(arg, " = '", value, "' must be a numeric variable (it is ",
+         paste(unique(vapply(frames[has], function(df) class(df[[value]])[1L], "")), collapse = " / "),
          ").", call. = FALSE)
-  time
+  value
 }
 
 # The candidate time variables, best first: the numeric covariates (incl. link
 # variables) of the equations, ordered by the number of equations using them (ties:
 # first appearance in the order of `eqs`).
 timeCandidates <- function(eqs, prep) {
+  # link variables include the GROUPS of the linked long formulae: not time candidates (B27)
+  covariates <- unique(unlist(lapply(eqs, function(p) p$variables$covariate), use.names = FALSE))
   cand <- lapply(eqs, function(p) {
     df <- prep[[p$response]]
-    v <- unique(c(p$variables$covariate, p$linkVariables))
+    v <- intersect(unique(c(p$variables$covariate, p$linkVariables)), covariates)
     v[vapply(v, function(z) z %in% names(df) && is.numeric(df[[z]]), NA)]
   })
   all <- unlist(cand, use.names = FALSE)
@@ -177,13 +199,8 @@ timeCandidates <- function(eqs, prep) {
 
 # Default grouping variable: the grouping term of most random-effect blocks.
 plotGroupVariable <- function(eqs, prep, group) {
-  if (!is.null(group)) {
-    if (length(group) != 1L) stop("`group` must be the name of one variable.", call. = FALSE)
-    if (!is.na(group) && !any(vapply(prep, function(df) group %in% names(df), NA)))
-      stop("`group` = '", group, "' is not a variable of the model's data.", call. = FALSE)
-    return(as.character(group))
-  }
-  g <- unlist(lapply(eqs, function(p) vapply(p$re, `[[`, "", "group")), use.names = FALSE)
+  if (!is.null(group)) return(checkColumnName(group, "`group`", prep, allowNA = TRUE))
+  g <- unlist(lapply(eqs, reGroups), use.names = FALSE)
   if (!length(g)) {
     g <- unlist(lapply(eqs, function(p) p$variables$group), use.names = FALSE)
   }

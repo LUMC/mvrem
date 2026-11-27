@@ -20,6 +20,13 @@
 #' the order given; `order` records the order of all formulae as passed, which
 #' every result of a model follows (see [modelResponses()]).
 #'
+#' A formula with `latent(name)` on the left-hand side is a latent equation (in
+#' either style): an unobserved process with fixed and random effects and `scaled()`
+#' terms naming longitudinal responses, to which outcomes link with `scaled(name)`;
+#' its options are given as `family = list(name = latentSpec(...))` (see
+#' [latentSpec()]). `scaled(x, coef = 1)` fixes a coefficient (e.g. to fix the scale
+#' of a latent process).
+#'
 #' @param form One list of formulae for both parts (also a single formula):
 #'   outcomes are the formulae with `scaled()` terms. With `formLong`, the list
 #'   of outcome formulae (the pair style, as `formOut`).
@@ -50,7 +57,8 @@
 #'   covariates of the linked longitudinal formulae not already used by the
 #'   outcome formula (the outcome data must contain them). Also returned:
 #'   `variables`, a data frame with one row per variable and role, with columns
-#'   `variable`, `role` (`"response"`, `"covariate"` or `"group"`), `part` and
+#'   `variable`, `role` (`"response"`, `"covariate"`, `"group"` or `"aux"`, the variables of
+#'   `trials()` / `exposure()` / `event()` / `weights()`), `part` and
 #'   `formula` (response of the formula it occurs in), and `order`, the
 #'   response names in the order the formulae were passed (one list: as
 #'   listed; pair style: the outcomes, then the longitudinal responses).
@@ -58,48 +66,82 @@
 collectFormulas <- function(form = NULL, formLong = NULL, family = NULL, familyOut = NULL,
                             familyLong = NULL, formOut = NULL) {
   parts <- formulaParts(form, formLong, formOut)
-  formOut <- parts$out
-  formLong <- parts$long
 
-  out <- lapply(formOut, parseJsmFormula, part = "out")
-  long <- lapply(formLong, parseJsmFormula, part = "long")
-  names(out) <- vapply(out, `[[`, "", "response")
-  names(long) <- vapply(long, `[[`, "", "response")
+  # all formulae parsed, in the order passed; a `latent(name)` left-hand side makes a latent
+  # equation in either list of the pair style (E38: the role comes from the syntax)
+  parsed <- if (is.null(parts$parsed)) {          # the pair style: not parsed yet
+    c(lapply(parts$out, parseJsmFormula, part = "out"),
+      lapply(parts$long, parseJsmFormula, part = "long"))
+  } else parts$parsed
+  role <- vapply(parsed, `[[`, "", "part")
+  byRole <- function(r) {
+    p <- parsed[role == r]
+    stats::setNames(p, vapply(p, `[[`, "", "response"))
+  }
+  out <- byRole("out")
+  long <- byRole("long")
+  latent <- byRole("latent")
 
-  allResp <- c(names(out), names(long))
+  allResp <- vapply(parsed, `[[`, "", "response")
   dup <- unique(allResp[duplicated(allResp)])
   if (length(dup))
     stop("Response(s) defined more than once: ", paste(dup, collapse = ", "), call. = FALSE)
 
-  checkScaledTargets(out, long)
-  out <- lapply(out, addLinkVariables, long = long)
-  fams <- attachFamilies(out, long, family, familyOut, familyLong)
+  checkScaledTargets(out, long, latent)
+  latent <- lapply(latent, addLinkVariables, long = long, latent = latent)
+  out <- lapply(out, addLinkVariables, long = long, latent = latent)
+  fams <- attachFamilies(out, long, family, familyOut, familyLong, latent)
   out <- fams$out
   long <- fams$long
+  latent <- fams$latent
 
   # the order in which the formulae were passed (one list: as listed; pair: outcomes, then
   # longitudinal): every result of a model follows it (modelResponses())
-  order <- character(length(parts$isOut))
-  order[parts$isOut] <- names(out)
-  order[!parts$isOut] <- names(long)
-
-  list(out = out, long = long, variables = variableTable(c(out, long)), order = order)
+  res <- list(out = out, long = long, variables = variableTable(c(out, long, latent)),
+              order = allResp)
+  if (length(latent)) res$latent <- latent
+  res
 }
+
+# The latent equations of a collectFormulas() result / model parts (empty list if none; objects
+# built before E38 have no `latent`).
+latentParts <- function(z) if (is.null(z$latent)) list() else z$latent
 
 # The longitudinal responses an outcome is linked to: the targets of its scaled() terms,
 # in the order written (empty for a longitudinal formula or an outcome without scaled()).
 scaledTargets <- function(p) vapply(p$scaled, `[[`, "", "target")
+# An expression of a parsed formula (its response, a trials() / exposure() / event() / weights()
+# input) evaluated in a data frame, with the formula's environment behind it.
+evalInData <- function(p, expr, df) eval(expr, df, environment(p$formula))
+# The grouping terms of a parsed formula's random-effect blocks (in the order written).
+reGroups <- function(p) vapply(p$re, `[[`, "", "group")
+# The family of a parsed formula (collectFormulas() attaches one; a standalone parsed formula
+# has none: the default Gaussian).
+formulaFamily <- function(p) if (is.null(p$family)) defaultFamily() else p$family
+# The variables a formula needs in its data: its own (response, covariates, groups, aux) and
+# the link variables (an outcome's zero equations); `response = FALSE` leaves the response out.
+formulaVariables <- function(p, response = TRUE) {
+  v <- p$variables
+  if (!response) v <- v[setdiff(names(v), "response")]
+  unique(c(unlist(v, use.names = FALSE), p$linkVariables))
+}
 
 # collectFormulas(): every scaled() target is a longitudinal response, named once per
 # outcome; the model has at least one scaled() term and every longitudinal response is
 # the target of one (all equations are linked).
-checkScaledTargets <- function(out, long) {
-  for (o in out) {
+checkScaledTargets <- function(out, long, latent = list()) {
+  for (o in c(out, latent)) {
     targets <- scaledTargets(o)
-    bad <- setdiff(targets, names(long))
-    if (length(bad))
+    allowed <- if (o$part == "latent") names(long) else c(names(long), names(latent))
+    bad <- setdiff(targets, allowed)
+    if (length(bad)) {
+      if (o$part == "latent" && any(bad %in% names(latent)))
+        stop("scaled() in latent(", o$response, ") refers to the latent equation(s) ",
+             paste(intersect(bad, names(latent)), collapse = ", "), ": a latent equation can ",
+             "only be linked to longitudinal responses.", call. = FALSE)
       stop("scaled() in formula for '", o$response, "' refers to unknown longitudinal ",
            "response(s): ", paste(bad, collapse = ", "), call. = FALSE)
+    }
     dupT <- unique(targets[duplicated(targets)])
     if (length(dupT))
       stop("scaled() in formula for '", o$response, "' is given more than once for: ",
@@ -109,20 +151,36 @@ checkScaledTargets <- function(out, long) {
     stop("No scaled() term in the outcome formulae: at least one is required to link an ",
          "outcome to a longitudinal response, e.g. y ~ t + scaled(x1) with x1 ~ t + (1 | id).",
          call. = FALSE)
-  unlinked <- setdiff(names(long), unlist(lapply(out, scaledTargets)))
+  unlinked <- setdiff(names(long), unlist(lapply(c(out, latent), scaledTargets)))
   if (length(unlinked))
     stop("Longitudinal response(s) not named in any scaled() term: ",
          paste(unlinked, collapse = ", "), ". Every longitudinal equation must be linked to an ",
          "outcome, e.g. y ~ t + scaled(", unlinked[1L], ").", call. = FALSE)
+  unused <- setdiff(names(latent), unlist(lapply(out, scaledTargets)))
+  if (length(unused))
+    stop("Latent equation(s) not named in any scaled() term of an outcome: ",
+         paste(unused, collapse = ", "), ". Link each to an outcome, e.g. y ~ 1 + scaled(",
+         unused[1L], ").", call. = FALSE)
   invisible()
 }
 
-# An outcome's `linkVariables`: the groups and covariates of its linked longitudinal
-# formulae that the outcome formula does not use. The outcome data must contain them,
-# because the zero equations of a link are evaluated at the outcome rows.
-addLinkVariables <- function(o, long) {
-  linkVars <- unique(unlist(lapply(long[scaledTargets(o)], function(l)
-    l$variables[c("group", "covariate")]), use.names = FALSE))
+# The variables a linked formula is evaluated at (its groups and covariates); for a latent
+# equation also those of its own targets (its zero rows evaluate them).
+linkedVariables <- function(p, long, latent = list()) {
+  own <- unlist(p$variables[c("group", "covariate")], use.names = FALSE)
+  if (p$part != "latent") return(unique(own))
+  unique(c(own, unlist(lapply(long[scaledTargets(p)], linkedVariables, long = long),
+                       use.names = FALSE)))
+}
+
+# An outcome's (or latent equation's) `linkVariables`: the groups and covariates of its
+# linked formulae (through a latent equation: also those of the latent's targets) that the
+# formula does not use. The outcome data must contain them, because the zero equations of a
+# link are evaluated at the outcome rows.
+addLinkVariables <- function(o, long, latent = list()) {
+  linkVars <- unique(unlist(lapply(scaledTargets(o), function(t)
+    linkedVariables(if (t %in% names(latent)) latent[[t]] else long[[t]], long, latent)),
+    use.names = FALSE))
   o$linkVariables <- setdiff(linkVars, unlist(o$variables, use.names = FALSE))
   if (is.null(o$linkVariables)) o$linkVariables <- character()
   o
@@ -130,7 +188,29 @@ addLinkVariables <- function(o, long) {
 
 # Each response's family (`family`, overridden per part by `familyOut` / `familyLong`),
 # checked against the left-hand-side inputs; survival families only for outcomes.
-attachFamilies <- function(out, long, family, familyOut, familyLong) {
+attachFamilies <- function(out, long, family, familyOut, familyLong, latent = list()) {
+  # E38: a latent equation takes a latentSpec() in `family` (its options), never a family
+  family <- checkFamilyList(family, "family")
+  for (arg in list(list(familyOut, "familyOut"), list(familyLong, "familyLong"))) {
+    bad <- intersect(names(arg[[1L]]), names(latent))
+    if (length(bad))
+      stop("`", arg[[2L]], "` names the latent equation(s) ", paste(bad, collapse = ", "),
+           ": give their options as `family = list(", bad[1L], " = latentSpec(...))`.", call. = FALSE)
+  }
+  for (r in names(latent)) {
+    spec <- family[[r]]
+    if (!is.null(spec) && !inherits(spec, "mvremLatentSpec"))
+      stop("'", r, "' is a latent equation (it has no observations): its entry in `family` must ",
+           "be latentSpec(...), not a family.", call. = FALSE)
+    latent[[r]]$spec <- if (is.null(spec)) latentSpec() else spec
+  }
+  isSpec <- vapply(family, inherits, NA, "mvremLatentSpec")
+  if (any(isSpec[!names(family) %in% names(latent)]))
+    stop("latentSpec() in `family` for ", paste(setdiff(names(family)[isSpec], names(latent)), collapse = ", "),
+         ", which is not a latent equation (write it as `latent(name) ~ ...`).", call. = FALSE)
+  family <- family[!names(family) %in% names(latent)]
+  if (!length(family)) family <- NULL
+
   famOut <- resolveFamilies(familyOut, names(out), "familyOut", names(long), family)
   famLong <- resolveFamilies(familyLong, names(long), "familyLong", names(out), family)
   for (r in names(out)) out[[r]]$family <- famOut[[r]]
@@ -140,7 +220,7 @@ attachFamilies <- function(out, long, family, familyOut, familyLong) {
   if (length(survLong))
     stop("Survival family for longitudinal response(s) ", paste0("'", survLong, "'", collapse = ", "),
          ": survival families are only for outcomes (`formOut`).", call. = FALSE)
-  list(out = out, long = long)
+  list(out = out, long = long, latent = latent)
 }
 
 # The outcome and longitudinal formula lists from the formula arguments of
@@ -163,9 +243,7 @@ formulaParts <- function(form = NULL, formLong = NULL, formOut = NULL) {
                 isOut = rep(c(TRUE, FALSE), c(length(form), length(formLong)))))
   if (pairName == "formOut")
     stop("`formOut` needs `formLong`; to give all formulae in one list use `form`.", call. = FALSE)
-  res <- splitFormulas(form)
-  res$isOut <- vapply(unname(form), function(f) hasCall(f[[length(f)]], "scaled"), NA)
-  res
+  splitParsed(form)
 }
 
 #' Split one list of formulae into outcome and longitudinal formulae
@@ -187,34 +265,41 @@ formulaParts <- function(form = NULL, formLong = NULL, formOut = NULL) {
 #' @examples
 #' splitFormulas(list(x1 ~ t + (1 | id), y ~ t + scaled(x1)))
 #' @export
-splitFormulas <- function(form) {
+splitFormulas <- function(form) splitParsed(form)[c("out", "long")]
+
+# splitFormulas() with what it parsed: `isOut` per formula and `parsed` (the parsed formulae,
+# in the order given), so that formulaParts() / collectFormulas() do not parse them again.
+splitParsed <- function(form) {
   if (inherits(form, "formula")) form <- list(form)
   if (!is.list(form) || !length(form) ||
       !all(vapply(form, function(f) inherits(f, "formula"), NA)))
     stop("`form` must be a formula or a non-empty list of formulae.", call. = FALSE)
   form <- unname(form)
-  isOut <- vapply(form, function(f) hasCall(f[[length(f)]], "scaled"), NA)
+  # E38: `latent(eta) ~ ...` is a latent equation (it may have scaled() terms too)
+  isLatent <- vapply(form, function(f) isLatentLhs(parseLhs(f[[2L]])$response), NA)
+  isOut <- !isLatent & vapply(form, function(f) hasCall(f[[length(f)]], "scaled"), NA)
   parsed <- lapply(seq_along(form), function(i)
-    parseJsmFormula(form[[i]], if (isOut[i]) "out" else "long"))
+    parseJsmFormula(form[[i]], if (isLatent[i]) "latent" else if (isOut[i]) "out" else "long"))
   resp <- vapply(parsed, `[[`, "", "response")
-  res <- list(out = form[isOut], long = form[!isOut])
+  res <- list(out = form[isOut], long = form[!isOut & !isLatent], latent = form[isLatent],
+              isOut = isOut, isLatent = isLatent, parsed = parsed)
   # duplicated responses: reported by collectFormulas()
   if (anyDuplicated(resp)) return(res)
   showForm <- function(i) paste0("`", deparse1(form[[i]]), "`")
 
-  for (i in which(isOut)) {
+  for (i in which(isOut | isLatent)) {
     targets <- scaledTargets(parsed[[i]])
     bad <- intersect(targets, resp[isOut])
     if (length(bad))
       stop(paste0("scaled(", bad, ") in ", showForm(i), " targets ",
                   vapply(match(bad, resp), showForm, ""),
                   ", which is an outcome (it has a scaled() term); a scaled() target must be a ",
-                  "longitudinal formula", collapse = "\n"), ".", call. = FALSE)
+                  "longitudinal or latent formula", collapse = "\n"), ".", call. = FALSE)
   }
-  targets <- unlist(lapply(parsed[isOut], scaledTargets))
+  targets <- unlist(lapply(parsed[isOut | isLatent], scaledTargets))
   # unknown targets (e.g. a misspelt response): reported by collectFormulas()
   if (!all(targets %in% resp)) return(res)
-  unlinked <- which(!isOut & !resp %in% targets)
+  unlinked <- which(!isOut & !isLatent & !resp %in% targets)
   one <- length(unlinked) == 1L
   if (length(unlinked))
     stop(paste0(vapply(unlinked, showForm, ""), collapse = ", "),
@@ -244,7 +329,8 @@ checkFamilyList <- function(family, argName) {
          family$kind, "Family()).", call. = FALSE)
   isName <- function(f) is.character(f) && length(f) == 1L && !is.na(f)
   ok <- if (is.character(family)) !anyNA(family) else
-    is.list(family) && all(vapply(family, function(f) inherits(f, "mvremFamily") || isName(f), NA))
+    is.list(family) && all(vapply(family, function(f)
+      inherits(f, c("mvremFamily", "mvremLatentSpec")) || isName(f), NA))
   if (!ok)
     stop("`", argName, "` must be a named list of family objects (see ?families) or ",
          "INLA likelihood names.", call. = FALSE)
@@ -261,8 +347,12 @@ checkFamilyList <- function(family, argName) {
 # Elements become mvremFamily objects.
 resolveFamilies <- function(family, resp, argName, otherResp, shared = NULL) {
   res <- stats::setNames(lapply(resp, function(r) defaultFamily()), resp)
-  toFamily <- function(f, arg)
+  toFamily <- function(f, arg) {
+    if (inherits(f, "mvremLatentSpec"))
+      stop("latentSpec() in `", arg, "` is only for latent equations (`latent(name) ~ ...`).",
+           call. = FALSE)
     if (inherits(f, "mvremFamily")) f else familyFromName(f, paste0("`", arg, "`"))
+  }
 
   shared <- checkFamilyList(shared, "family")
   unknownShared <- setdiff(names(shared), c(resp, otherResp))
@@ -316,11 +406,8 @@ variableTable <- function(parsed) {
       stringsAsFactors = FALSE
     )
   })
-  res <- do.call(rbind, c(list(data.frame(variable = character(), role = character(),
-                                          part = character(), formula = character())),
-                          rows))
-  rownames(res) <- NULL
-  res
+  bindRows(rows, data.frame(variable = character(), role = character(), part = character(),
+                            formula = character()))
 }
 
 # Data variables used by a formula, by role. all.vars() skips function names,
@@ -375,13 +462,22 @@ collectVariables <- function(lhs, fixed, re, aux) {
 #'     each with `target` (longitudinal response name), `params` and `prior`
 #'     (a `normalCoef()` prior of the association coefficient, or `NULL`).
 #' @export
-parseJsmFormula <- function(formula, part = c("out", "long")) {
+parseJsmFormula <- function(formula, part = c("out", "long", "latent")) {
   part <- match.arg(part)
   if (!inherits(formula, "formula") || length(formula) != 3L)
     stop("Each model formula must be a two-sided formula.", call. = FALSE)
 
   env <- environment(formula)
   lhsParts <- parseLhs(formula[[2L]])
+  # E38: `latent(eta) ~ ...` is an unobserved latent equation whatever part it was given in
+  # (the role is decided by the syntax, as for outcomes and longitudinal formulae)
+  if (isLatentLhs(lhsParts$response)) {
+    part <- "latent"
+    lhsParts <- parseLatentLhs(lhsParts)
+  } else if (part == "latent") {
+    stop("A latent equation needs `latent(name)` on the left-hand side (found '",
+         deparse1(formula[[2L]]), "').", call. = FALSE)
+  }
   responseExpr <- lhsParts$response
   lhs <- deparse1(responseExpr)
   response <- all.vars(responseExpr)
@@ -406,7 +502,7 @@ parseJsmFormula <- function(formula, part = c("out", "long")) {
       keep[[length(keep) + 1L]] <- list(expr = call("(", lme4Bar(blk$term)), sign = tm$sign)
     } else if (is.call(e) && identical(e[[1L]], quote(scaled))) {
       if (part == "long")
-        stop("scaled() is only allowed in outcome formulae (found in formula for '",
+        stop("scaled() is only allowed in outcome and latent formulae (found in formula for '",
              response, "').", call. = FALSE)
       scaled[[length(scaled) + 1L]] <- parseScaled(e, env, response)
     } else if (isBar(inner)) {
@@ -416,6 +512,11 @@ parseJsmFormula <- function(formula, part = c("out", "long")) {
       # B2: only nested CALLS re(...) / scaled(...) are errors; a variable named `re` is a covariate
       if (hasCall(e, c("re", "scaled")))
         stop("re() and scaled() must be top-level terms (formula for '", response, "').",
+             call. = FALSE)
+      # B21: model.matrix() drops offset() terms, so the offset would be lost silently
+      if (hasCall(e, "offset"))
+        stop("offset() is not supported (formula for '", response, "'): give the exposure of a ",
+             "count response on the left-hand side, `", response, " | exposure(e) ~ ...`.",
              call. = FALSE)
       keep[[length(keep) + 1L]] <- tm
       fixed[[length(fixed) + 1L]] <- e
@@ -437,8 +538,26 @@ parseJsmFormula <- function(formula, part = c("out", "long")) {
     variables = collectVariables(responseExpr, fixed, re, lhsParts$aux),
     re = re
   )
-  if (part == "out") res$scaled <- scaled
+  # a latent equation has no data column of its own: its "response" is only a name
+  if (part == "latent") res$variables$response <- character()
+  if (part != "long") res$scaled <- scaled
   res
+}
+
+# `latent(eta)` on the left-hand side of a formula (E38).
+isLatentLhs <- function(e) is.call(e) && identical(e[[1L]], quote(latent))
+
+# The left-hand side `latent(name)` -> the name as response; no family inputs.
+parseLatentLhs <- function(lhsParts) {
+  e <- lhsParts$response
+  if (length(lhsParts$aux))
+    stop("A latent equation has no observations, so its left-hand side takes no ",
+         paste0(names(lhsParts$aux), "()", collapse = ", "), " (found `", deparse1(e), " | ...`).",
+         call. = FALSE)
+  if (length(e) != 2L || !is.name(e[[2L]]) || (!is.null(names(e)) && names(e)[2L] != ""))
+    stop("latent() takes exactly one unnamed argument, the name of the latent process, e.g. ",
+         "`latent(eta) ~ 1 + t + (1 | id) + scaled(x1)` (found `", deparse1(e), "`).", call. = FALSE)
+  list(response = e[[2L]], aux = list())
 }
 
 # Family inputs allowed on the left-hand side: y | trials(n) + exposure(E),
@@ -507,6 +626,8 @@ lme4Bar <- function(bar) {
   bar
 }
 
+# One random-effect block as the parser stores it: the bar term, its group (deparsed right
+# side), `correlated` (`|` vs `||`), the extra f() arguments and the block prior.
 makeReBlock <- function(bar, params, prior = NULL) {
   list(
     term = bar,
@@ -527,45 +648,63 @@ extraParams <- function(args, env, what, response) {
   lapply(args, eval, envir = env)
 }
 
+# A `re(bar, ...)` term -> RE block (makeReBlock()): the bar term (any brackets stripped),
+# the named extra arguments evaluated in `env` (f() arguments), `prior` taken out of them.
 parseRe <- function(e, env, response) {
   args <- as.list(e)[-1L]
   if (length(args)) args[[1L]] <- stripParens(args[[1L]])  # re((1 | id)) as in lme4 (B3)
   if (!length(args) || !isBar(args[[1L]]))
     stop("The first argument of re() must be a random-effects term like `1 + t | id` ",
          "(formula for '", response, "').", call. = FALSE)
+  a <- termArguments(args, env, "re", response, priorOk = function(pr) pr$target != "coef",
+                     priorMsg = "must be created by a prior constructor (gammaPrec(), pcSd(), halfNormalSd(), halfCauchySd(), wishartPrec())")
+  makeReBlock(args[[1L]], a$params, a$prior)
+}
+
+# The named extra arguments of a re() / scaled() term (`args` = all its arguments; the first
+# must be unnamed): the f() parameters evaluated in `env` and the `prior` taken out of them,
+# which must be NULL or an mvremPrior accepted by `priorOk` (else an error with `priorMsg`).
+termArguments <- function(args, env, what, response, priorOk, priorMsg) {
   if (!is.null(names(args)) && names(args)[1L] != "")
-    stop("The first argument of re() must not be named (formula for '", response, "').",
+    stop("The first argument of ", what, "() must not be named (formula for '", response, "').",
          call. = FALSE)
-  params <- extraParams(args[-1L], env, "re", response)
+  params <- extraParams(args[-1L], env, what, response)
   prior <- params[["prior"]]
   params <- params[names(params) != "prior"]
   if (!length(params)) params <- list()
-  if (!is.null(prior) && !(inherits(prior, "mvremPrior") && prior$target != "coef"))
-    stop("`prior` in re() must be created by a prior constructor (gammaPrec(), pcSd(), ",
-         "halfNormalSd(), halfCauchySd(), wishartPrec()); raw INLA settings go in `hyper` ",
+  if (!is.null(prior) && !(inherits(prior, "mvremPrior") && priorOk(prior)))
+    stop("`prior` in ", what, "() ", priorMsg, "; raw INLA settings go in `hyper` ",
          "(formula for '", response, "').", call. = FALSE)
-  makeReBlock(args[[1L]], params, prior)
+  list(params = params, prior = prior)
 }
 
+# A `scaled(x, ...)` term -> list(target = "x", params, prior): named extra arguments evaluated
+# in `env` (f() arguments of the scaled copy), `prior` (normalCoef() only) taken out of them.
 parseScaled <- function(e, env, response) {
   args <- as.list(e)[-1L]
   x <- if (length(args)) args[[1L]] else NULL
   if (!is.name(x))
     stop("The first argument of scaled() must be the name of a longitudinal ",
          "response, e.g. scaled(x1) (formula for '", response, "').", call. = FALSE)
-  if (!is.null(names(args)) && names(args)[1L] != "")
-    stop("The first argument of scaled() must not be named (formula for '", response,
-         "').", call. = FALSE)
-  params <- extraParams(args[-1L], env, "scaled", response)
-  prior <- params[["prior"]]
-  params <- params[names(params) != "prior"]
-  if (!length(params)) params <- list()
-  if (!is.null(prior) && !(inherits(prior, "mvremPrior") && prior$target == "coef"))
-    stop("`prior` in scaled() must be normalCoef(); raw INLA settings go in `hyper` ",
-         "(formula for '", response, "').", call. = FALSE)
-  list(target = as.character(x), params = params, prior = prior)
+  a <- termArguments(args, env, "scaled", response, priorOk = function(pr) pr$target == "coef",
+                     priorMsg = "must be normalCoef()")
+  # E38: `coef = c` fixes the association coefficient at c (e.g. to fix the scale of a latent)
+  coef <- a$params[["coef"]]
+  a$params <- a$params[names(a$params) != "coef"]
+  if (!length(a$params)) a$params <- list()
+  if (!is.null(coef)) {
+    if (!isNumber(coef) || !is.finite(coef))
+      stop("`coef` in scaled(", as.character(x), ") must be one finite number (formula for '",
+           response, "').", call. = FALSE)
+    if (!is.null(a$prior))
+      stop("scaled(", as.character(x), ") has both `coef` (a fixed coefficient) and `prior` ",
+           "(formula for '", response, "'): give one.", call. = FALSE)
+  }
+  list(target = as.character(x), params = a$params, prior = a$prior, coef = coef)
 }
 
+# A formula `lhs ~ terms` from a list of terms (expr + sign, as the parser collected them),
+# in the formula's environment; an empty term list gives `lhs ~ 1`.
 buildFormula <- function(lhs, terms, env) {
   rhs <- NULL
   for (tm in terms) {

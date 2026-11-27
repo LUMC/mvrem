@@ -31,8 +31,9 @@
 #' \eqn{S(t) = \exp(-\lambda t^\alpha)} with \eqn{\log \lambda} the linear
 #' predictor (the exponential is \eqn{\alpha = 1}), so an association
 #' coefficient is a log hazard ratio. The marker enters the hazard at the values
-#' of its covariates given in the outcome row (e.g. `t = time`). Survival
-#' responses are not plotted, have no residuals and cannot be predicted; their
+#' of its covariates given in the outcome row (e.g. `t = time`). [plot()][plot.mvremModel()]
+#' draws a survival response as its Kaplan-Meier curve with the model's survival
+#' curve ([survivalCurves()]). Survival responses have no residuals and cannot be predicted; their
 #' fitted value ([fittedValues()]) is \eqn{\lambda} (the hazard scale), not a
 #' mean time. A time of 0 is accepted for a censored row only.
 #'
@@ -206,7 +207,7 @@ inlaFamily <- function(family, link = NULL, hyper = list(), control = list()) {
   if (!isString(family))
     stop("`family` must be a single INLA likelihood name.", call. = FALSE)
   checkInlaFamily(family, "inlaFamily()")
-  if (!is.list(hyper) || (length(hyper) && (is.null(names(hyper)) || any(names(hyper) == ""))))
+  if (!isNamedList(hyper))
     stop("`hyper` must be a named list.", call. = FALSE)
   specs <- lapply(names(hyper), function(h)
     hyperSpec(paste0("\\theta^{#r#}_{\\mathrm{", escapeLatex(h), "}}")))
@@ -248,7 +249,7 @@ newFamily <- function(family, kind, link, linkDefault, hyper, specs, control, au
       stop("Link '", link, "' is not available for INLA likelihood '", family, "'; ",
            "available: ", paste(setdiff(known, "default"), collapse = ", "), ".", call. = FALSE)
   }
-  if (!is.list(control) || (length(control) && (is.null(names(control)) || any(names(control) == ""))))
+  if (!isNamedList(control))
     stop("`control` must be a named list of control.family entries.", call. = FALSE)
   hyper <- hyper[!vapply(hyper, is.null, NA)]
   for (h in names(hyper)) checkHyper(hyper[[h]], h, specs[[h]]$dists, family)
@@ -258,6 +259,8 @@ newFamily <- function(family, kind, link, linkDefault, hyper, specs, control, au
             class = "mvremFamily")
 }
 
+# A family's hyperparameter argument: NULL (INLA default), an mvremPrior of one of `dists`
+# (not a data-scaled one), or a raw INLA hyper list; anything else is an error naming it.
 checkHyper <- function(x, name, dists, family) {
   what <- paste0("Hyperparameter `", name, "` of family '", family, "'")
   if (inherits(x, "mvremPrior")) {
@@ -293,6 +296,8 @@ familyLinks <- function(family) {
   INLA::inla.models()$likelihood[[family]]$link
 }
 
+# `family` must be an INLA likelihood name (validated against inla.models() when INLA is
+# installed, else a warning) that is not a survival likelihood (those have constructors).
 checkInlaFamily <- function(family, where) {
   if (!hasInla()) {
     warning("INLA is not installed: likelihood family '", family, "' in ", where,
@@ -390,25 +395,25 @@ checkResponse <- function(p, df) {
     ok[is.infinite(v) | is.nan(v)] <- FALSE
     if (!all(ok)) stop(what, " ", msg, " (", sum(!ok), " value(s) not).", call. = FALSE)
   }
-  n <- if (!is.null(p$aux$trials)) eval(p$aux$trials, df, env)
+  n <- if (!is.null(p$aux$trials)) evalInData(p, p$aux$trials, df)
   if (!is.null(n)) check(paste0("trials() of '", p$lhs, "'"), n, n >= 1 & isInt(n),
                          "must be positive integers")
   if (!is.null(p$aux$exposure)) {
-    E <- eval(p$aux$exposure, df, env)
+    E <- evalInData(p, p$aux$exposure, df)
     check(paste0("exposure() of '", p$lhs, "'"), E, E > 0 & is.finite(E), "must be positive")
   }
   if (!is.null(p$aux$weights)) {
-    w <- eval(p$aux$weights, df, env)
+    w <- evalInData(p, p$aux$weights, df)
     check(paste0("weights() of '", p$lhs, "'"), w, w > 0 & is.finite(w), "must be positive and finite")
   }
   ev <- NULL
   if (!is.null(p$aux$event)) {
-    ev <- eval(p$aux$event, df, env)
+    ev <- evalInData(p, p$aux$event, df)
     check(paste0("event() of '", p$lhs, "'"), ev, ev == 0 | ev == 1,
           "must be 0 (censored) or 1 (event)")
   }
   if (fam$support == "any") return(invisible())
-  y <- eval(p$responseExpr, df, env)
+  y <- evalInData(p, p$responseExpr, df)
   what <- paste0("Response '", p$lhs, "' (family '", fam$family, "')")
   switch(fam$support,
     real = check(what, y, rep(TRUE, length(y)), "must be finite"),
@@ -444,7 +449,7 @@ familyLatex <- function(fam, y, tag, rName, aux, obs = "i", resp = NULL) {
   # precision-like parameter of row `obs`, times the observation weight of weights()
   w <- auxLatex("weights")
   wsym <- function(h) if (is.null(w)) sym(h) else paste0(w, "\\, ", sym(h))
-  normal <- function(m) paste0(annot("\\mathcal{N}", distKey("normal")), paren(m, ", \\left(", wsym("prec"), "\\right)^{-1}"))
+  normal <- function(m) paste0(normalSymbol(), paren(m, ", \\left(", wsym("prec"), "\\right)^{-1}"))
   residual <- NULL
   if (fam$kind %in% c("lognormal", "t") || (fam$kind == "gaussian" && identical(fam$link, "identity"))) {
     residual <- annot(paste0("\\varepsilon^{", tag, "}_{", obs, "}"), annotKey("eps", resp))
@@ -512,6 +517,7 @@ familyDistributions <- function(fam, sym, wsym, auxLatex, paren, normal) {
                                      survivalStatus))
 }
 
+# The LaTeX of a link function applied to `x` (NULL = INLA's default of the family).
 linkLatex <- function(link, x) {
   if (is.null(link)) link <- "default"
   arg <- paste0("\\left(", x, "\\right)")

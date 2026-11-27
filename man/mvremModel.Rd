@@ -93,8 +93,10 @@ users who want to run INLA themselves.
 response and term.
 \item \code{hyperparameters()}: posterior summaries of the hyperparameters (residual
 and family parameters, precisions and correlations of random effects,
-association coefficients) with readable names. INLA's parametrisation is
-used: precisions, not standard deviations.
+association coefficients): \code{response}, \code{parameter} (a readable name), \code{type} (\code{"family"},
+\code{"random"}, \code{"association"}, or \code{NA} for a row mvrem does not recognise) and the posterior
+\code{mean}, \code{sd}, \code{q0.025}, \code{q0.5}, \code{q0.975}, \code{mode}; rows grouped by response in the order the
+formulae were passed. INLA's parametrisation is used: precisions, not standard deviations.
 \item \code{associations()}: the association coefficients \eqn{\gamma} of the
 \code{scaled()} terms, one row per outcome and longitudinal response.
 \item \code{refit()}: the model fitted again (see \code{\link[=jsm]{jsm()}} for the options).
@@ -107,8 +109,11 @@ can provide the same interface. No knowledge of INLA is needed to use them.
 }
 \details{
 An \code{mvremModel} is a list with the components \code{call}, \code{forms} (result of
-\code{\link[=collectFormulas]{collectFormulas()}}), \code{data} (result of \code{\link[=prepareData]{prepareData()}}), \code{dataSummary}
-(\code{\link[=summarizeData]{summarizeData()}}), \code{inla} (result of \code{\link[=buildInlaFormula]{buildInlaFormula()}}), \code{options} (how
+\code{\link[=collectFormulas]{collectFormulas()}}), \code{data} (result of \code{\link[=prepareData]{prepareData()}}), \code{display} (categorical
+columns of the data that no formula uses, kept for colouring / shaping the plots only),
+\code{dataSummary}
+(\code{\link[=summarizeData]{summarizeData()}}), \code{inla} (result of \code{\link[=buildInlaFormula]{buildInlaFormula()}}), \code{time} (the time variable:
+\code{variable}, \code{source}, \code{candidates}; see \code{\link[=timeVariable]{timeVariable()}}), \code{options} (how
 INLA is run), \code{fit} (the INLA result, \code{NULL} if not fitted) and \code{inlaError}.
 Prefer the functions below to \code{$}.
 

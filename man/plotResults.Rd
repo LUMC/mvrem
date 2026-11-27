@@ -22,6 +22,8 @@ plotRandomEffects(x, ...)
   type = c("caterpillar", "pairs"),
   ncol = NULL,
   interactive = NULL,
+  colorBy = NULL,
+  shapeBy = NULL,
   ...
 )
 
@@ -49,7 +51,13 @@ plotFixedEffects(x, ...)
 
 plotAssociations(x, ...)
 
-\method{plotAssociations}{mvremModel}(x, type = c("forest", "density"), interactive = NULL, ...)
+\method{plotAssociations}{mvremModel}(
+  x,
+  response = NULL,
+  type = c("forest", "density"),
+  interactive = NULL,
+  ...
+)
 }
 \arguments{
 \item{x}{A fitted \code{mvremModel}, e.g. from \code{\link[=jsm]{jsm()}}.}
@@ -72,6 +80,11 @@ posterior mean).}
 \item{interactive}{\code{NULL} (default): an HTML widget with mouse-over
 identification if the htmlwidgets package is installed, else base graphics;
 \code{TRUE} / \code{FALSE} force one of them (see \code{\link[=htmlPlot]{htmlPlot()}}).}
+
+\item{colorBy, shapeBy}{\code{plotRandomEffects(type = "pairs")}: a categorical variable of the data
+colouring / shaping the subjects' points, as in \code{\link[=plot.mvremModel]{plot.mvremModel()}} (a subject takes its
+value when it is the same in all its rows); the widget offers the variables in dropdowns and
+hides / shows a level by a click on its legend entry. Ignored by the other plots.}
 
 \item{scale}{\code{"sd"} (default) or \code{"variance"}: the scale of the table and of
 the marginals in \code{varianceComponents()}.}

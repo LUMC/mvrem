@@ -16,6 +16,7 @@ jsm(
   time = NULL,
   na.action = stats::na.pass,
   naming = getOption("mvrem.naming", namingScheme()),
+  zeroLogPrec = getOption("mvrem.zeroLogPrec", defaultZeroLogPrec),
   fit = TRUE,
   verbose = FALSE,
   threads = NULL,
@@ -73,13 +74,23 @@ an error (use \code{na.omit} to drop such rows).}
 
 \item{naming}{Naming scheme of the INLA objects, see \code{\link[=namingScheme]{namingScheme()}}.}
 
+\item{zeroLogPrec}{Fixed log precision of the zero-equation fields (the copies of the
+longitudinal and latent predictors that the links use): small = diffuse, so that they
+follow the zero equations. Default -6 (prior SD 20); it is not scale-free, so a marker in
+large units may need a smaller value. A latent equation can set its own with
+\code{\link[=latentSpec]{latentSpec()}}.}
+
 \item{fit}{If \code{FALSE}, the model is only constructed (formulae, data, INLA
 formula and stacked data, LaTeX equations are all available); INLA is not
 needed. Fit it later with \code{\link[=refit]{refit()}}.}
 
 \item{verbose}{Show INLA's progress output.}
 
-\item{threads}{Number of threads for INLA (default: INLA's choice).}
+\item{threads}{Threads of the INLA run: \code{NULL} (default: INLA's choice, all cores unless
+\code{options(mvrem.threads = )} is set), a whole number (outer threads, 1 inner), \code{"auto"}
+(the cores \code{\link[=availableThreads]{availableThreads()}} finds, which respects container limits, schedulers and
+\verb{R CMD check}) or a string \code{"A:B"} (A threads over the hyperparameter integration points,
+B threads inside the solver). Several fits at once: \code{\link[=jsmApply]{jsmApply()}}.}
 
 \item{inlaOptions}{Advanced: named list of further arguments of
 \code{INLA::inla()}, e.g. \code{list(control.compute = list(dic = TRUE, waic = TRUE))}.
@@ -96,8 +107,12 @@ and \code{scaled()} terms.}
 An object of class \code{c("jsm", "mvremModel")}. Use the accessors
 (\code{\link[=modelFormulas]{modelFormulas()}}, \code{\link[=modelData]{modelData()}}, \code{\link[=dataSummary]{dataSummary()}}, \code{\link[=inlaFormula]{inlaFormula()}},
 \code{\link[=inlaData]{inlaData()}}, \code{\link[=inlaFit]{inlaFit()}}, \code{\link[=fixedEffects]{fixedEffects()}}, \code{\link[=hyperparameters]{hyperparameters()}},
-\code{\link[=associations]{associations()}}), \code{\link[=latexEquation]{latexEquation()}}, \code{\link[=formatInlaFormula]{formatInlaFormula()}}, \code{summary()},
-\code{coef()}, \code{\link[=refit]{refit()}} and \code{update()}.
+\code{\link[=associations]{associations()}}), the result functions (\code{\link[=estimatesTable]{estimatesTable()}}, \code{\link[=randomEffects]{randomEffects()}},
+\code{\link[=varianceComponents]{varianceComponents()}}, \code{\link[=fittedValues]{fittedValues()}}, \code{residuals()}, \code{\link[=modelFit]{modelFit()}},
+\code{\link[=survivalCurves]{survivalCurves()}}, \code{\link[=predict.mvremModel]{predict.mvremModel()}}, \code{\link[=timeVariable]{timeVariable()}}), the plots (\code{plot()},
+\code{\link[=plotResiduals]{plotResiduals()}}, \code{\link[=plotRandomEffects]{plotRandomEffects()}}, \code{\link[=plotVarianceComponents]{plotVarianceComponents()}},
+\code{\link[=plotFixedEffects]{plotFixedEffects()}}, \code{\link[=plotAssociations]{plotAssociations()}}, \code{\link[=plotModel]{plotModel()}}), \code{\link[=latexEquation]{latexEquation()}},
+\code{\link[=formatInlaFormula]{formatInlaFormula()}}, \code{summary()}, \code{coef()}, \code{\link[=refit]{refit()}} and \code{update()}.
 
 If INLA fails, the model is returned unfitted with a warning (and
 \code{\link[=refit]{refit()}} can be tried again).
@@ -122,7 +137,9 @@ beta: the precision of row i is multiplied by \code{w[i]}; see \link{families}).
 The formulae are given as one list (\code{form}; outcomes are the formulae with
 \code{scaled()} terms, see \code{\link[=splitFormulas]{splitFormulas()}}) or, as before, as the pair
 \code{formOut} / \code{formLong} (positionally \code{jsm(outcomes, longitudinal, data)}),
-which is needed only for an outcome without a \code{scaled()} term. A pair-style
+which is needed only for an outcome without a \code{scaled()} term. A formula
+\code{latent(eta) ~ ...} is an unobserved latent equation linking markers to
+outcomes (see \code{\link[=latentSpec]{latentSpec()}}). A pair-style
 model stores its call with \code{formOut} / \code{formLong} whichever way it was
 written.
 }

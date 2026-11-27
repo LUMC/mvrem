@@ -20,7 +20,7 @@
 #' @return A data frame of class `mvremEstimates` with `response`, `type`
 #'   (`"fixed"`, `"association"`, `"sd"`, `"correlation"`, `"residual"`,
 #'   `"family"`, or `"other"` for hyperparameters mvrem does not recognise),
-#'   `parameter` (e.g. `t`, `gamma (x1 -> y)`, `SD t | id`, `corr intercept, t | id`,
+#'   `parameter` (e.g. `(Intercept)`, `t`, `gamma (x1 -> y)`, `SD t | id`, `corr (Intercept), t | id`,
 #'   `residual SD`, `phi`), and the posterior `mean`, `sd`, `q0.025`, `q0.5`,
 #'   `q0.975`; rows grouped by response (in the order the formulae were passed to [jsm()]). `format()` returns a
 #'   character string (lines separated by newlines) with `mean (sd)` and the
@@ -39,7 +39,7 @@ estimatesTable <- function(x, ...) UseMethod("estimatesTable")
 #' @export
 estimatesTable.mvremModel <- function(x, response = NULL, ...) {
   needFit(x)
-  resp <- checkResponses(x, response)
+  resp <- selectResponses(x, response)
   stats <- c("mean", "sd", "q0.025", "q0.5", "q0.975")
   rows <- function(r, type, parameter, df) {
     df <- as.data.frame(df)
@@ -47,12 +47,12 @@ estimatesTable.mvremModel <- function(x, response = NULL, ...) {
                      parameter = rep_len(as.character(parameter), nrow(df)), stringsAsFactors = FALSE),
           df[stats])
   }
-  effLabel <- function(e) effectLabel(e, x$inla$naming)
+  effLabel <- function(e) modelEffectLabel(x, e)
   out <- list()
   fe <- fixedEffects(x)
   out$fixed <- rows(fe$response, "fixed", effLabel(fe$term), fe)
   a <- associations(x)
-  out$assoc <- rows(a$outcome, "association", paste0("gamma (", a$longitudinal, " -> ", a$outcome, ")"), a)
+  out$assoc <- rows(a$outcome, "association", paste0("gamma (", linkLabel(a$longitudinal, a$outcome), ")"), a)
   vc <- varianceComponentsOrNull(x, "the estimates table")$table
   if (!is.null(vc) && nrow(vc)) {
     sdr <- vc[vc$parameter == "sd" & vc$block != "residual", ]
@@ -63,16 +63,15 @@ estimatesTable.mvremModel <- function(x, response = NULL, ...) {
     res <- vc[vc$block == "residual", ]
     out$res <- rows(res$response, "residual", "residual SD", res)
   }
-  h <- hyperparameters(x)
-  fam <- h[h$type %in% "family" & !h$parameter %in% c("residual precision", "precision"), ]
+  h <- hyperTable(x)
+  fam <- h[h$type %in% "family" & !h$short %in% "prec", ]
   out$fam <- rows(fam$response, "family", fam$parameter, fam)
   oth <- h[is.na(h$type), ]
   out$oth <- rows(rep("", nrow(oth)), "other", oth$parameter, oth)
   tab <- do.call(rbind, unname(out))
   tab <- tab[tab$response %in% c(resp, ""), , drop = FALSE]
-  tab <- tab[order(match(tab$response, c(resp, "")),
-                   match(tab$type, c("fixed", "association", "sd", "correlation", "residual", "family", "other"))), ]
-  rownames(tab) <- NULL
+  tab <- orderByResponse(x, tab, then = match(tab$type, c("fixed", "association", "sd", "correlation",
+                                                           "residual", "family", "other")))
   structure(tab, class = c("mvremEstimates", "data.frame"))
 }
 
@@ -80,7 +79,7 @@ estimatesTable.mvremModel <- function(x, response = NULL, ...) {
 #' @export
 format.mvremEstimates <- function(x, style = c("text", "markdown", "latex", "array"), digits = 3, ...) {
   style <- match.arg(style)
-  num <- function(v) trimws(formatC(signif(v, digits), digits = digits, format = "g"))
+  num <- function(v) numText(v, digits)
   # a zero-row table gives zero rows (paste0() of empty vectors with constants has length 1)
   rowPaste <- function(...) if (nrow(x)) paste0(...) else character()
   est <- rowPaste(num(x$mean), " (", num(x$sd), ")")
